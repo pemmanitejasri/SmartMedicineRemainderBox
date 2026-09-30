@@ -129,7 +129,7 @@ export default function App() {
           const diffMinutes = (scheduledDate.getTime() - now.getTime()) / (1000 * 60);
           const medKey = `${med.id}_${now.toDateString()}`;
 
-          // 1. 5-Minute Advance Reminder (between 4 and 5.5 minutes before dose)
+          // 1. 5-Minute Advance Reminder (between 3.5 and 5.5 minutes before dose - Requirements #9, #11, #12)
           if (
             settings.reminder5Min &&
             diffMinutes > 3.5 &&
@@ -140,7 +140,7 @@ export default function App() {
 
             addToast({
               title: `Medicine Reminder`,
-              desc: `${med.name} – ${med.dosage} ${med.dosage_unit || ''}: Your medicine is due in 5 minutes.`,
+              desc: `${med.name} ${med.dosage} ${med.dosage_unit || ''} is due in 5 minutes.`,
               type: 'reminder'
             });
 
@@ -150,8 +150,16 @@ export default function App() {
 
             if (settings.browserNotif && 'Notification' in window && Notification.permission === 'granted') {
               new Notification('SmartMed Reminder', {
-                body: `${med.name} – ${med.dosage} ${med.dosage_unit || ''} is due in 5 minutes.`
+                body: `${med.name} ${med.dosage} ${med.dosage_unit || ''} is due in 5 minutes.`
               });
+            }
+
+            // Trigger / Queue SMS Reminder
+            if (settings.smsReminders !== false && currentUser?.mobile_number) {
+              api.queueSmsNotification({
+                medicine: med,
+                reminderType: 'advance_5min'
+              }).catch(() => {});
             }
           }
 
@@ -166,7 +174,7 @@ export default function App() {
 
             addToast({
               title: `Time to take your medicine`,
-              desc: `${med.name} – ${med.dosage} ${med.dosage_unit || ''}: Please take your scheduled dose.`,
+              desc: `${med.name} ${med.dosage} ${med.dosage_unit || ''}.`,
               type: 'alarm',
               duration: 8000
             });
@@ -176,9 +184,17 @@ export default function App() {
             }
 
             if (settings.browserNotif && 'Notification' in window && Notification.permission === 'granted') {
-              new Notification('SmartMed — Dose Due Now', {
-                body: `Time to take your medicine: ${med.name} – ${med.dosage} ${med.dosage_unit || ''}.`
+              new Notification('SmartMed — Time to take your medicine', {
+                body: `It is time to take your ${med.name} ${med.dosage} ${med.dosage_unit || ''} medicine.`
               });
+            }
+
+            // Trigger / Queue SMS Reminder
+            if (settings.smsReminders !== false && currentUser?.mobile_number) {
+              api.queueSmsNotification({
+                medicine: med,
+                reminderType: 'due_now'
+              }).catch(() => {});
             }
           }
         });

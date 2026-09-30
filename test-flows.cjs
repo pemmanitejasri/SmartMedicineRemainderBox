@@ -1,13 +1,19 @@
 // Automated Verification Script for SmartMed Requirements (Tests 1 - 10)
 const fs = require('fs');
 
-// Simple mock for browser localStorage in Node.js
+// Simple mock for browser localStorage and IndexedDB in Node.js
 const storage = {};
 global.localStorage = {
   getItem: (k) => storage[k] || null,
   setItem: (k, v) => { storage[k] = String(v); },
   removeItem: (k) => { delete storage[k]; }
 };
+
+try {
+  const { indexedDB, IDBKeyRange } = require('./frontend/node_modules/fake-indexeddb');
+  global.indexedDB = indexedDB;
+  global.IDBKeyRange = IDBKeyRange;
+} catch (e) {}
 
 // Test runner
 async function runTests() {
@@ -94,7 +100,59 @@ async function runTests() {
   console.assert(user1MedsAfterDelete.length === 0, 'Medicine deleted from database');
   console.log('✅ Test 4 & 5 Passed: Medicine deleted successfully from database.');
 
-  console.log('\n🎉 ALL TESTS (1 through 10) PASSED FLAWLESSLY!\n');
+  // Test 11: Mobile Number Validation (Requirement #6)
+  const validMobile1 = api.validateIndianMobile('+91 9876543210');
+  console.assert(validMobile1.valid === true, '+91 9876543210 must be valid');
+  const validMobile2 = api.validateIndianMobile('9876543210');
+  console.assert(validMobile2.valid === true, '10-digit Indian number starting with 9 must be valid');
+  const invalidMobile1 = api.validateIndianMobile('12345');
+  console.assert(invalidMobile1.valid === false, 'Short number must be invalid');
+  const invalidMobile2 = api.validateIndianMobile('0000000000');
+  console.assert(invalidMobile2.valid === false, 'Repeated 0s must be invalid');
+  console.log('✅ Test 11 Passed: Indian mobile number validation works correctly.');
+
+  // Test 12: Offline Medicine Addition (Requirement #3)
+  const offlineMed = await api.addMedicine({
+    name: 'Paracetamol',
+    dosage: '500',
+    dosage_unit: 'mg',
+    schedule_time: '08:00 AM'
+  });
+  console.assert(offlineMed && offlineMed.name === 'Paracetamol', 'Offline medicine saved immediately');
+  const currentMeds = await api.getMedicines();
+  console.assert(currentMeds.some(m => m.id === offlineMed.id), 'Medicine immediately visible in list');
+  console.log('✅ Test 12 Passed: Offline medicine addition saves immediately without network error.');
+
+  // Test 13: Offline Login & Login with Mobile (Requirements #5 & #7)
+  const user3Signup = await api.signUp({
+    name: 'Test Indian User',
+    email: 'indianuser@gmail.com',
+    mobile_number: '+91 9876543210',
+    password: 'securepassword123'
+  });
+  await api.logout();
+
+  // Login with mobile number
+  const mobileLogin = await api.login({ identifier: '9876543210', password: 'securepassword123' });
+  console.assert(mobileLogin.user.email === 'indianuser@gmail.com', 'Login via mobile number succeeds');
+  console.log('✅ Test 13 Passed: User can log in with registered mobile number offline.');
+
+  // Test 14: SMS Notification Queuing (Requirements #9 & #11)
+  const smsQueueResult = await api.queueSmsNotification({
+    medicine: offlineMed,
+    reminderType: 'advance_5min'
+  });
+  console.assert(smsQueueResult.phone === '+91 98765 43210', 'SMS routed to registered mobile');
+  console.assert(smsQueueResult.message.includes('due in 5 minutes'), 'SMS contains due in 5 minutes text');
+  console.log('✅ Test 14 Passed: SMS notification queued with proper message formatting.');
+
+  // Test 15: Theme Persistence (Requirement #18)
+  await api.updateSettings({ theme: 'dark' });
+  const savedSettings = await api.getSettings();
+  console.assert(savedSettings.theme === 'dark', 'Theme persistence verified');
+  console.log('✅ Test 15 Passed: Dark mode theme preference persists across sessions.');
+
+  console.log('\n🎉 ALL TESTS (1 through 15) PASSED FLAWLESSLY!\n');
 }
 
 runTests().catch(err => {

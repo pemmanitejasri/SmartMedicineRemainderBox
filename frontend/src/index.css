@@ -525,6 +525,106 @@ body {
   box-shadow: 0 0 0 3px rgba(2, 132, 199, 0.15);
 }
 
+.form-input::placeholder,
+.form-textarea::placeholder {
+  color: var(--text-muted);
+  opacity: 0.8;
+}
+
+.form-select option {
+  background-color: var(--bg-card);
+  color: var(--text-primary);
+}
+
+/* Password Visibility Toggle Button (Requirement #15) */
+.password-eye-btn {
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px;
+  border-radius: var(--radius-sm);
+  transition: color var(--transition-fast);
+}
+
+.password-eye-btn:hover {
+  color: var(--text-primary);
+}
+
+/* Small Connection Status Badge (Requirement #19) */
+.connection-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.28rem 0.65rem;
+  border-radius: var(--radius-full);
+  font-size: 0.76rem;
+  font-weight: 700;
+  border: 1px solid transparent;
+  transition: all var(--transition-fast);
+  white-space: nowrap;
+}
+
+.connection-badge.online {
+  background: var(--status-taken-bg);
+  color: var(--status-taken-text);
+  border-color: var(--status-taken-border);
+}
+
+.connection-badge.offline {
+  background: var(--status-pending-bg);
+  color: var(--status-pending-text);
+  border-color: var(--status-pending-border);
+}
+
+.connection-badge.syncing {
+  background: var(--status-upcoming-bg);
+  color: var(--status-upcoming-text);
+  border-color: var(--status-upcoming-border);
+}
+
+.sync-spinner {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  100% { transform: rotate(360deg); }
+}
+
+/* Auth Page Layout */
+.auth-page-container {
+  min-height: 100vh;
+  background: radial-gradient(ellipse at top, #f0f7fc 0%, #e2eef7 100%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem 1.5rem;
+}
+
+[data-theme="dark"] .auth-page-container {
+  background: radial-gradient(ellipse at top, #0f1a38 0%, #070d1e 100%);
+}
+
+/* Modal Overlay (Requirement #16 & #17) */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(11, 19, 41, 0.7);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 1rem;
+}
+
 .form-hint {
   font-size: 0.8rem;
   color: var(--text-muted);

@@ -1,6 +1,16 @@
 import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Activity, Mail, Lock, User, ArrowRight, ShieldCheck, Check } from 'lucide-react';
+import {
+  Activity,
+  Mail,
+  Lock,
+  User,
+  ShieldCheck,
+  Check,
+  Eye,
+  EyeOff,
+  Phone
+} from 'lucide-react';
 import { api } from '../services/api';
 
 export default function Signup({ onNotify }) {
@@ -8,8 +18,11 @@ export default function Signup({ onNotify }) {
 
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
+  const [mobileNumber, setMobileNumber] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
 
@@ -25,6 +38,14 @@ export default function Signup({ onNotify }) {
       setErrorMsg('Please enter your email address.');
       return;
     }
+
+    // Validate Indian mobile number (Requirement #6)
+    const mobileValidation = api.validateIndianMobile(mobileNumber);
+    if (!mobileValidation.valid) {
+      setErrorMsg(mobileValidation.error);
+      return;
+    }
+
     if (password.length < 6) {
       setErrorMsg('Password must be at least 6 characters.');
       return;
@@ -36,11 +57,17 @@ export default function Signup({ onNotify }) {
 
     setLoading(true);
     try {
-      await api.signUp({ name, email, password });
+      await api.signUp({
+        name: name.trim(),
+        email: email.trim(),
+        mobile_number: mobileValidation.formatted,
+        password
+      });
+
       if (onNotify) {
         onNotify({
           title: 'Account created successfully',
-          desc: `Welcome to SmartMed, ${name}! Your secure session is ready.`,
+          desc: `Welcome to SmartMed, ${name.trim()}! Registered with mobile ${mobileValidation.formatted}.`,
           type: 'success'
         });
       }
@@ -60,20 +87,11 @@ export default function Signup({ onNotify }) {
   };
 
   return (
-    <div
-      style={{
-        minHeight: '100vh',
-        background: 'radial-gradient(ellipse at top, #f0f7fc 0%, #e2eef7 100%)',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        padding: '2rem 1.5rem'
-      }}
-    >
+    <div className="auth-page-container">
       <div
         style={{
           width: '100%',
-          maxWidth: '960px',
+          maxWidth: '980px',
           background: 'var(--bg-card)',
           borderRadius: '24px',
           boxShadow: 'var(--shadow-lg)',
@@ -86,7 +104,7 @@ export default function Signup({ onNotify }) {
         {/* Left Side: Product Showcase */}
         <div
           style={{
-            background: 'linear-gradient(145deg, #0f172a 0%, #1e293b 50%, #0369a1 100%)',
+            background: 'linear-gradient(145deg, #091326 0%, #0f2042 50%, #0369a1 100%)',
             color: '#ffffff',
             padding: '3rem 2.5rem',
             display: 'flex',
@@ -136,7 +154,7 @@ export default function Signup({ onNotify }) {
             </h1>
 
             <p style={{ fontSize: '1.05rem', color: '#cbd5e1', marginTop: '0.85rem', lineHeight: 1.5 }}>
-              Never miss a dose. Stay on schedule.
+              Never miss a dose. Stay on schedule with smart alerts.
             </p>
 
             {/* Value bullets */}
@@ -145,39 +163,39 @@ export default function Signup({ onNotify }) {
                 <div style={{ width: '24px', height: '24px', borderRadius: '50%', background: 'rgba(56, 189, 248, 0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#38bdf8', flexShrink: 0 }}>
                   <Check size={14} strokeWidth={3} />
                 </div>
-                <span>Private & isolated prescription records for every user</span>
+                <span>Full offline functionality with automatic background sync</span>
               </div>
 
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', color: '#e2e8f0', fontSize: '0.92rem' }}>
                 <div style={{ width: '24px', height: '24px', borderRadius: '50%', background: 'rgba(56, 189, 248, 0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#38bdf8', flexShrink: 0 }}>
                   <Check size={14} strokeWidth={3} />
                 </div>
-                <span>Automated 5-minute advance reminders & chime alerts</span>
+                <span>Proactive SMS dosage reminders to your mobile number</span>
               </div>
 
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', color: '#e2e8f0', fontSize: '0.92rem' }}>
                 <div style={{ width: '24px', height: '24px', borderRadius: '50%', background: 'rgba(56, 189, 248, 0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#38bdf8', flexShrink: 0 }}>
                   <Check size={14} strokeWidth={3} />
                 </div>
-                <span>Syncs in real time with the physical Smart Medicine Box</span>
+                <span>Isolated profile records with Row Level Security (RLS)</span>
               </div>
             </div>
           </div>
 
           <div style={{ marginTop: '2rem', display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.8rem', color: '#94a3b8' }}>
             <ShieldCheck size={16} color="#34d399" />
-            <span>Secure account protection with encrypted sessions</span>
+            <span>Secure account protection with encrypted password hashes</span>
           </div>
         </div>
 
         {/* Right Side: Sign Up Form */}
-        <div style={{ padding: '3rem 2.5rem', display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
-          <div style={{ marginBottom: '1.75rem' }}>
+        <div style={{ padding: '2.5rem', display: 'flex', flexDirection: 'column', justifyContent: 'center', background: 'var(--bg-card)' }}>
+          <div style={{ marginBottom: '1.5rem' }}>
             <h2 style={{ fontSize: '1.6rem', fontWeight: 800, color: 'var(--text-primary)', letterSpacing: '-0.02em' }}>
               Sign Up
             </h2>
-            <p style={{ fontSize: '0.9rem', color: 'var(--text-muted)', marginTop: '4px' }}>
-              Set up your personal medication profile
+            <p style={{ fontSize: '0.88rem', color: 'var(--text-muted)', marginTop: '4px' }}>
+              Set up your medication profile & SMS reminders
             </p>
           </div>
 
@@ -200,7 +218,7 @@ export default function Signup({ onNotify }) {
 
           <form onSubmit={handleSubmit}>
             {/* Full Name */}
-            <div className="form-group">
+            <div className="form-group" style={{ marginBottom: '1rem' }}>
               <label className="form-label" htmlFor="signup-name">
                 Full Name
               </label>
@@ -214,7 +232,7 @@ export default function Signup({ onNotify }) {
                   type="text"
                   className="form-input"
                   style={{ paddingLeft: '2.6rem' }}
-                  placeholder="e.g. John Doe"
+                  placeholder="e.g. Rahul Sharma"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                   required
@@ -222,8 +240,8 @@ export default function Signup({ onNotify }) {
               </div>
             </div>
 
-            {/* Email */}
-            <div className="form-group">
+            {/* Email Address */}
+            <div className="form-group" style={{ marginBottom: '1rem' }}>
               <label className="form-label" htmlFor="signup-email">
                 Email Address
               </label>
@@ -245,8 +263,34 @@ export default function Signup({ onNotify }) {
               </div>
             </div>
 
-            {/* Password */}
-            <div className="form-group">
+            {/* Mobile Number with Indian Validation (Requirement #6) */}
+            <div className="form-group" style={{ marginBottom: '1rem' }}>
+              <label className="form-label" htmlFor="signup-mobile">
+                Mobile Number (for SMS Reminders)
+              </label>
+              <div style={{ position: 'relative' }}>
+                <Phone
+                  size={18}
+                  style={{ position: 'absolute', left: '14px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }}
+                />
+                <input
+                  id="signup-mobile"
+                  type="tel"
+                  className="form-input"
+                  style={{ paddingLeft: '2.6rem' }}
+                  placeholder="+91 9876543210"
+                  value={mobileNumber}
+                  onChange={(e) => setMobileNumber(e.target.value)}
+                  required
+                />
+              </div>
+              <span className="form-hint">
+                Indian 10-digit mobile number starting with 6, 7, 8, or 9
+              </span>
+            </div>
+
+            {/* Password with Eye Toggle (Requirement #15) */}
+            <div className="form-group" style={{ marginBottom: '1rem' }}>
               <label className="form-label" htmlFor="signup-password">
                 Password
               </label>
@@ -257,19 +301,28 @@ export default function Signup({ onNotify }) {
                 />
                 <input
                   id="signup-password"
-                  type="password"
+                  type={showPassword ? 'text' : 'password'}
                   className="form-input"
-                  style={{ paddingLeft: '2.6rem' }}
+                  style={{ paddingLeft: '2.6rem', paddingRight: '2.8rem' }}
                   placeholder="Minimum 6 characters"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   required
                 />
+                <button
+                  type="button"
+                  className="password-eye-btn"
+                  onClick={() => setShowPassword(!showPassword)}
+                  aria-label={showPassword ? 'Hide password' : 'Show password'}
+                  title={showPassword ? 'Hide password' : 'Show password'}
+                >
+                  {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                </button>
               </div>
             </div>
 
-            {/* Confirm Password */}
-            <div className="form-group">
+            {/* Confirm Password with Eye Toggle (Requirement #15) */}
+            <div className="form-group" style={{ marginBottom: '1.25rem' }}>
               <label className="form-label" htmlFor="signup-confirm-password">
                 Confirm Password
               </label>
@@ -280,14 +333,23 @@ export default function Signup({ onNotify }) {
                 />
                 <input
                   id="signup-confirm-password"
-                  type="password"
+                  type={showConfirmPassword ? 'text' : 'password'}
                   className="form-input"
-                  style={{ paddingLeft: '2.6rem' }}
+                  style={{ paddingLeft: '2.6rem', paddingRight: '2.8rem' }}
                   placeholder="Repeat your password"
                   value={confirmPassword}
                   onChange={(e) => setConfirmPassword(e.target.value)}
                   required
                 />
+                <button
+                  type="button"
+                  className="password-eye-btn"
+                  onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                  aria-label={showConfirmPassword ? 'Hide password' : 'Show password'}
+                  title={showConfirmPassword ? 'Hide password' : 'Show password'}
+                >
+                  {showConfirmPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                </button>
               </div>
             </div>
 
@@ -296,14 +358,14 @@ export default function Signup({ onNotify }) {
               type="submit"
               disabled={loading}
               className="btn btn-primary"
-              style={{ width: '100%', padding: '0.8rem', fontSize: '1rem', fontWeight: 700, marginTop: '0.5rem' }}
+              style={{ width: '100%', padding: '0.8rem', fontSize: '1rem', fontWeight: 700 }}
             >
               {loading ? 'Creating Account...' : 'Create Account'}
             </button>
           </form>
 
           {/* Already have an account? Login */}
-          <div style={{ textAlign: 'center', marginTop: '1.75rem', fontSize: '0.92rem', color: 'var(--text-secondary)' }}>
+          <div style={{ textAlign: 'center', marginTop: '1.5rem', fontSize: '0.92rem', color: 'var(--text-secondary)' }}>
             Already have an account?{' '}
             <Link
               to="/login"

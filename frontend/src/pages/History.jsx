@@ -113,7 +113,7 @@ export default function History() {
       <div
         className="card"
         style={{
-          background: 'linear-gradient(135deg, #ffffff 0%, #f0fdf4 100%)',
+          background: 'var(--bg-card)',
           border: '1px solid var(--status-taken-border)',
           display: 'grid',
           gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',

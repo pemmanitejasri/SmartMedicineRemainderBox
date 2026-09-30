@@ -13,9 +13,9 @@ import {
   Inbox
 } from 'lucide-react';
 import LiveClock from '../components/LiveClock';
-import ReminderCard from '../components/ReminderCard';
 import MedicineCard from '../components/MedicineCard';
 import { api } from '../services/api';
+import { syncService } from '../services/syncService';
 
 export default function Dashboard({ onNotify }) {
   const [currentUser, setCurrentUser] = useState(null);
@@ -141,7 +141,7 @@ export default function Dashboard({ onNotify }) {
           justifyContent: 'space-between',
           flexWrap: 'wrap',
           gap: '1.25rem',
-          background: 'linear-gradient(135deg, #ffffff 0%, #f8fafc 100%)',
+          background: 'var(--bg-card)',
           padding: '1.25rem 1.5rem'
         }}
       >
@@ -157,8 +157,8 @@ export default function Dashboard({ onNotify }) {
           </p>
         </div>
 
-        {/* Live Clock */}
-        <LiveClock nextMedicine={nextMedicine} nextMinutes={18} />
+        {/* Live Clock (Clean real-time clock without permanent yellow timer) */}
+        <LiveClock />
       </div>
 
       {/* Smart Alerts (Show only when needed) */}
@@ -353,117 +353,107 @@ export default function Dashboard({ onNotify }) {
         </div>
       </div>
 
-      {/* Row: Next Medicine Card + Progress & Adherence */}
+      {/* Row: Today's Schedule Progress & Dynamic Adherence Score (Requirement #13 - Yellow timer removed) */}
       {totalCount > 0 && (
-        <div className="grid-3" style={{ gridTemplateColumns: '1.6fr 1.4fr', gap: '1.5rem' }}>
-          {/* Next Medicine Card */}
-          <ReminderCard
-            medicine={nextMedicine}
-            onTake={handleMarkTaken}
-            onSimulateIoT={handleSimulateHardware}
-          />
-
-          {/* Progress & Dynamic Adherence Column */}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-            {/* Today's Progress */}
-            <div className="card" style={{ padding: '1.25rem' }}>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
-                <div style={{ fontWeight: 700, fontSize: '0.95rem', color: 'var(--text-primary)' }}>
-                  Today's Progress
-                </div>
-                <span style={{ fontSize: '0.85rem', fontWeight: 800, color: 'var(--primary-600)' }}>
-                  {takenCount} / {totalCount} completed
-                </span>
+        <div className="grid-2">
+          {/* Today's Progress */}
+          <div className="card" style={{ padding: '1.4rem' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
+              <div style={{ fontWeight: 700, fontSize: '0.95rem', color: 'var(--text-primary)' }}>
+                Today's Schedule Progress
               </div>
-
-              <div
-                style={{
-                  width: '100%',
-                  height: '10px',
-                  backgroundColor: 'var(--border-subtle)',
-                  borderRadius: '9999px',
-                  overflow: 'hidden'
-                }}
-              >
-                <div
-                  style={{
-                    width: `${progressPercent}%`,
-                    height: '100%',
-                    background: 'var(--primary-gradient)',
-                    borderRadius: '9999px',
-                    transition: 'width 0.4s ease'
-                  }}
-                />
-              </div>
-              <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: '0.5rem' }}>
-                {progressPercent}% of today's schedule completed
-              </div>
+              <span style={{ fontSize: '0.85rem', fontWeight: 800, color: 'var(--primary-600)' }}>
+                {takenCount} / {totalCount} completed
+              </span>
             </div>
 
-            {/* Adherence Score Card */}
             <div
-              className="card"
               style={{
-                padding: '1.25rem',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                gap: '1rem'
+                width: '100%',
+                height: '10px',
+                backgroundColor: 'var(--border-subtle)',
+                borderRadius: '9999px',
+                overflow: 'hidden'
               }}
             >
-              <div>
-                <div style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>
-                  Medicine Adherence
-                </div>
-                <div style={{ fontSize: '1.85rem', fontWeight: 800, color: 'var(--status-taken-text)', margin: '2px 0' }}>
-                  {adherence.percentage}%
-                </div>
-                <p style={{ fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
-                  {adherence.totalDoses > 0
-                    ? `You took ${adherence.takenDoses} out of ${adherence.totalDoses} scheduled doses.`
-                    : 'Adherence tracking will start once doses are recorded.'}
-                </p>
-              </div>
+              <div
+                style={{
+                  width: `${progressPercent}%`,
+                  height: '100%',
+                  background: 'var(--primary-gradient)',
+                  borderRadius: '9999px',
+                  transition: 'width 0.4s ease'
+                }}
+              />
+            </div>
+            <div style={{ fontSize: '0.82rem', color: 'var(--text-muted)', marginTop: '0.65rem' }}>
+              {progressPercent}% of today's scheduled dosages completed
+            </div>
+          </div>
 
-              {/* Circular Gauge */}
-              <div style={{ position: 'relative', width: '70px', height: '70px', flexShrink: 0 }}>
-                <svg width="70" height="70" viewBox="0 0 70 70">
-                  <circle
-                    cx="35"
-                    cy="35"
-                    r="28"
-                    fill="none"
-                    stroke="var(--border-subtle)"
-                    strokeWidth="6"
-                  />
-                  <circle
-                    cx="35"
-                    cy="35"
-                    r="28"
-                    fill="none"
-                    stroke="var(--status-taken-dot)"
-                    strokeWidth="6"
-                    strokeDasharray="175.9"
-                    strokeDashoffset={175.9 - (175.9 * adherence.percentage) / 100}
-                    strokeLinecap="round"
-                    transform="rotate(-90 35 35)"
-                    style={{ transition: 'stroke-dashoffset 0.6s ease' }}
-                  />
-                </svg>
-                <div
-                  style={{
-                    position: 'absolute',
-                    inset: 0,
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    fontSize: '0.8rem',
-                    fontWeight: 800,
-                    color: 'var(--text-primary)'
-                  }}
-                >
-                  {adherence.percentage}%
-                </div>
+          {/* Adherence Score Card */}
+          <div
+            className="card"
+            style={{
+              padding: '1.4rem',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: '1rem'
+            }}
+          >
+            <div>
+              <div style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>
+                Medicine Adherence
+              </div>
+              <div style={{ fontSize: '1.85rem', fontWeight: 800, color: 'var(--status-taken-text)', margin: '2px 0' }}>
+                {adherence.percentage}%
+              </div>
+              <p style={{ fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
+                {adherence.totalDoses > 0
+                  ? `You took ${adherence.takenDoses} of ${adherence.totalDoses} recorded dosages.`
+                  : 'Adherence tracking will start once doses are recorded.'}
+              </p>
+            </div>
+
+            {/* Circular Gauge */}
+            <div style={{ position: 'relative', width: '70px', height: '70px', flexShrink: 0 }}>
+              <svg width="70" height="70" viewBox="0 0 70 70">
+                <circle
+                  cx="35"
+                  cy="35"
+                  r="28"
+                  fill="none"
+                  stroke="var(--border-subtle)"
+                  strokeWidth="6"
+                />
+                <circle
+                  cx="35"
+                  cy="35"
+                  r="28"
+                  fill="none"
+                  stroke="var(--status-taken-dot)"
+                  strokeWidth="6"
+                  strokeDasharray="175.9"
+                  strokeDashoffset={175.9 - (175.9 * adherence.percentage) / 100}
+                  strokeLinecap="round"
+                  transform="rotate(-90 35 35)"
+                  style={{ transition: 'stroke-dashoffset 0.6s ease' }}
+                />
+              </svg>
+              <div
+                style={{
+                  position: 'absolute',
+                  inset: 0,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  fontSize: '0.82rem',
+                  fontWeight: 800,
+                  color: 'var(--text-primary)'
+                }}
+              >
+                {adherence.percentage}%
               </div>
             </div>
           </div>

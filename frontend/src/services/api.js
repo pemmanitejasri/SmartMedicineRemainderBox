@@ -1,26 +1,30 @@
 import { supabase, isSupabaseConfigured } from './supabase.js';
+import { db, hashPassword, validateIndianMobile } from './localDb.js';
+import { syncService } from './syncService.js';
 
-// Persistent Local Database Keys (strictly scoped per user ID)
+// Storage keys for backward compatibility and test runners
 const STORAGE_KEYS = {
   USERS: 'smartmed_db_users',
   SESSION: 'smartmed_auth_session',
   MEDICINES_PREFIX: 'smartmed_db_medicines_usr_',
   LOGS_PREFIX: 'smartmed_db_logs_usr_',
-  SETTINGS_PREFIX: 'smartmed_db_settings_usr_'
+  SETTINGS_PREFIX: 'smartmed_db_settings_usr_',
+  THEME: 'smartmed_theme'
 };
 
 function readStorage(key, fallback = null) {
   try {
+    if (typeof localStorage === 'undefined') return fallback;
     const val = localStorage.getItem(key);
     return val ? JSON.parse(val) : fallback;
   } catch (e) {
-    console.error(`Error reading ${key}:`, e);
     return fallback;
   }
 }
 
 function writeStorage(key, val) {
   try {
+    if (typeof localStorage === 'undefined') return;
     localStorage.setItem(key, JSON.stringify(val));
   } catch (e) {
     console.error(`Error writing ${key}:`, e);
@@ -31,41 +35,93 @@ function writeStorage(key, val) {
 const authListeners = new Set();
 const hardwareListeners = new Set();
 
+// Initialize background sync listener
+if (typeof window !== 'undefined') {
+  syncService.init();
+}
+
 export const api = {
+  validateIndianMobile,
+
   // =========================================================================
-  // 1. Authentication System
+  // 1. Offline-First Authentication & User Profile System
   // =========================================================================
 
   async getCurrentSession() {
-    if (isSupabaseConfigured() && supabase) {
+    // 1. Check local session first
+    const localSession = readStorage(STORAGE_KEYS.SESSION, null);
+
+    // 2. If online and Supabase is configured, verify remote session
+    if (syncService.getIsOnline() && isSupabaseConfigured() && supabase) {
       try {
         const { data: { session }, error } = await supabase.auth.getSession();
-        if (error || !session) return null;
-        return {
-          user: {
+        if (!error && session) {
+          // Fetch user profile from Dexie or remote
+          const localProfile = await db.profiles.get(session.user.id).catch(() => null);
+
+          const user = {
             id: session.user.id,
             email: session.user.email,
-            name: session.user.user_metadata?.name || session.user.email.split('@')[0]
-          },
-          token: session.access_token
-        };
+            name: localProfile?.full_name || session.user.user_metadata?.name || session.user.email.split('@')[0],
+            mobile_number: localProfile?.mobile_number || session.user.user_metadata?.mobile_number || ''
+          };
+
+          const validSession = { user, token: session.access_token };
+          writeStorage(STORAGE_KEYS.SESSION, validSession);
+          return validSession;
+        }
       } catch (e) {
-        console.warn('Supabase getSession failed, falling back to local session:', e);
+        console.warn('Supabase getSession error, falling back to local offline session:', e);
       }
     }
-    // Local session
-    return readStorage(STORAGE_KEYS.SESSION, null);
+
+    return localSession;
   },
 
   async getCurrentUser() {
     const session = await this.getCurrentSession();
-    return session ? session.user : null;
+    if (!session || !session.user) return null;
+
+    // Enrich with local profile if present
+    try {
+      const profile = await db.profiles.get(session.user.id);
+      if (profile) {
+        return {
+          ...session.user,
+          name: profile.full_name || session.user.name,
+          mobile_number: profile.mobile_number || session.user.mobile_number || ''
+        };
+      }
+    } catch (e) {
+      // Ignore in mock/test
+    }
+
+    return session.user;
   },
 
-  async signUp({ name, email, password }) {
+  async getUserProfile(userId) {
+    if (!userId) return null;
+    try {
+      const profile = await db.profiles.get(userId);
+      if (profile) return profile;
+    } catch (e) {}
+
+    // Fallback to local users list
+    const users = readStorage(STORAGE_KEYS.USERS, []);
+    return users.find((u) => u.id === userId) || null;
+  },
+
+  /**
+   * User Registration with Full Name, Email, Mobile Number, Password
+   * Requirements #6 & #8: Row Level Security + Profiles table
+   */
+  async signUp({ name, email, mobile_number, password }) {
     const cleanEmail = (email || '').trim().toLowerCase();
     const cleanName = (name || '').trim();
 
+    if (!cleanName) {
+      throw new Error('Please enter your full name.');
+    }
     if (!cleanEmail || !password) {
       throw new Error('Email and password are required.');
     }
@@ -73,117 +129,236 @@ export const api = {
       throw new Error('Password must be at least 6 characters.');
     }
 
-    if (isSupabaseConfigured() && supabase) {
-      const { data, error } = await supabase.auth.signUp({
-        email: cleanEmail,
-        password,
-        options: {
-          data: { name: cleanName }
+    // Validate Mobile Number (Requirement #6)
+    let validatedMobile = '';
+    if (mobile_number) {
+      const mobileCheck = validateIndianMobile(mobile_number);
+      if (!mobileCheck.valid) {
+        throw new Error(mobileCheck.error);
+      }
+      validatedMobile = mobileCheck.formatted;
+    }
+
+    const passwordHash = await hashPassword(password);
+    const userId = 'usr_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
+
+    let createdUser = {
+      id: userId,
+      name: cleanName,
+      email: cleanEmail,
+      mobile_number: validatedMobile
+    };
+
+    let sessionToken = 'offline_session_' + Date.now();
+
+    // If online and Supabase configured, attempt remote signup
+    if (syncService.getIsOnline() && isSupabaseConfigured() && supabase) {
+      try {
+        const { data, error } = await supabase.auth.signUp({
+          email: cleanEmail,
+          password,
+          options: {
+            data: {
+              name: cleanName,
+              mobile_number: validatedMobile
+            }
+          }
+        });
+
+        if (error) throw error;
+
+        if (data.user) {
+          createdUser.id = data.user.id;
+          sessionToken = data.session?.access_token || sessionToken;
+
+          // Insert into Supabase profiles table
+          await supabase.from('profiles').upsert({
+            id: data.user.id,
+            full_name: cleanName,
+            email: cleanEmail,
+            mobile_number: validatedMobile,
+            created_at: new Date().toISOString()
+          });
         }
-      });
-      if (error) throw error;
-      if (data.user) {
-        const user = {
-          id: data.user.id,
-          email: data.user.email,
-          name: cleanName || data.user.email.split('@')[0]
-        };
-        const session = { user, token: data.session?.access_token || 'sb_token' };
-        writeStorage(STORAGE_KEYS.SESSION, session);
-        this.notifyAuthChange(user);
-        return { user, session };
+      } catch (err) {
+        console.warn('Supabase signup fallback to local DB:', err.message);
       }
     }
 
-    // Local Database Signup
+    // Store in local Dexie database for offline capability
+    const profileRecord = {
+      id: createdUser.id,
+      full_name: cleanName,
+      email: cleanEmail,
+      mobile_number: validatedMobile,
+      password_hash: passwordHash, // Never raw password!
+      created_at: new Date().toISOString()
+    };
+
+    try {
+      await db.profiles.put(profileRecord);
+    } catch (e) {
+      console.warn('Dexie profile store error:', e);
+    }
+
+    // Also update local storage users for node tests and backup
     const users = readStorage(STORAGE_KEYS.USERS, []);
     const existing = users.find((u) => u.email === cleanEmail);
     if (existing) {
       throw new Error('An account with this email already exists.');
     }
 
-    const newUser = {
-      id: 'usr_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7),
-      name: cleanName || cleanEmail.split('@')[0],
-      email: cleanEmail,
-      password: password, // In production, hash passwords
-      created_at: new Date().toISOString()
-    };
-
-    users.push(newUser);
+    users.push({
+      ...profileRecord,
+      name: cleanName
+    });
     writeStorage(STORAGE_KEYS.USERS, users);
 
-    const session = {
-      user: {
-        id: newUser.id,
-        name: newUser.name,
-        email: newUser.email
-      },
-      token: 'session_' + Date.now()
-    };
-
+    const session = { user: createdUser, token: sessionToken };
     writeStorage(STORAGE_KEYS.SESSION, session);
-    this.notifyAuthChange(session.user);
-    return { user: session.user, session };
+    this.notifyAuthChange(createdUser);
+
+    return { user: createdUser, session };
   },
 
-  async login({ email, password, rememberMe = true }) {
-    const cleanEmail = (email || '').trim().toLowerCase();
-
-    if (!cleanEmail || !password) {
-      throw new Error('Please enter both email and password.');
+  /**
+   * User Login with Email or Mobile Number
+   * Requirements #5 & #7: Offline login recognition, no raw passwords in DB
+   */
+  async login({ email, identifier, password, rememberMe = true }) {
+    const rawIdentifier = (identifier || email || '').trim();
+    if (!rawIdentifier || !password) {
+      throw new Error('Please enter your email or mobile number, and password.');
     }
 
-    if (isSupabaseConfigured() && supabase) {
-      const { data, error } = await supabase.auth.signInWithPassword({
-        email: cleanEmail,
-        password
-      });
-      if (error) throw error;
-      if (data.user) {
-        const user = {
-          id: data.user.id,
-          email: data.user.email,
-          name: data.user.user_metadata?.name || data.user.email.split('@')[0]
-        };
-        const session = { user, token: data.session?.access_token };
-        writeStorage(STORAGE_KEYS.SESSION, session);
-        this.notifyAuthChange(user);
-        return { user, session };
+    const isEmail = rawIdentifier.includes('@');
+    const cleanEmail = isEmail ? rawIdentifier.toLowerCase() : null;
+    const isOnline = syncService.getIsOnline();
+
+    // 1. Try Supabase if Online and identifier is Email
+    if (isOnline && isSupabaseConfigured() && supabase && isEmail) {
+      try {
+        const { data, error } = await supabase.auth.signInWithPassword({
+          email: cleanEmail,
+          password
+        });
+
+        if (!error && data.user) {
+          const remoteUser = data.user;
+          const userMeta = remoteUser.user_metadata || {};
+
+          // Cache profile locally in Dexie for future offline logins (Requirement #5)
+          const passwordHash = await hashPassword(password);
+          const profile = {
+            id: remoteUser.id,
+            full_name: userMeta.name || cleanEmail.split('@')[0],
+            email: remoteUser.email,
+            mobile_number: userMeta.mobile_number || '',
+            password_hash: passwordHash,
+            created_at: new Date().toISOString()
+          };
+
+          try {
+            await db.profiles.put(profile);
+          } catch (e) {}
+
+          const user = {
+            id: remoteUser.id,
+            name: profile.full_name,
+            email: remoteUser.email,
+            mobile_number: profile.mobile_number
+          };
+
+          const session = { user, token: data.session?.access_token };
+          writeStorage(STORAGE_KEYS.SESSION, session);
+          this.notifyAuthChange(user);
+          return { user, session };
+        }
+      } catch (e) {
+        console.warn('Supabase signIn failed, checking local credentials:', e.message);
       }
     }
 
-    // Local Database Login
-    const users = readStorage(STORAGE_KEYS.USERS, []);
-    const found = users.find((u) => u.email === cleanEmail);
+    // 2. Offline Login Recognition (Requirement #5)
+    // Find profile in Dexie by Email or Mobile Number
+    let foundProfile = null;
+    try {
+      if (isEmail) {
+        foundProfile = await db.profiles.where('email').equalsIgnoreCase(cleanEmail).first();
+      } else {
+        // Search by mobile
+        const cleanedDigits = rawIdentifier.replace(/[\s\-\(\)\+]/g, '').slice(-10);
+        const allProfiles = await db.profiles.toArray();
+        foundProfile = allProfiles.find((p) => {
+          const pDigits = (p.mobile_number || '').replace(/[\s\-\(\)\+]/g, '').slice(-10);
+          return pDigits === cleanedDigits;
+        });
+      }
+    } catch (e) {
+      console.warn('Dexie search error:', e);
+    }
 
-    if (!found || found.password !== password) {
+    // Fallback to localStorage users
+    if (!foundProfile) {
+      const users = readStorage(STORAGE_KEYS.USERS, []);
+      if (isEmail) {
+        foundProfile = users.find((u) => (u.email || '').toLowerCase() === cleanEmail);
+      } else {
+        const cleanedDigits = rawIdentifier.replace(/[\s\-\(\)\+]/g, '').slice(-10);
+        foundProfile = users.find((u) => {
+          const pDigits = (u.mobile_number || '').replace(/[\s\-\(\)\+]/g, '').slice(-10);
+          return pDigits === cleanedDigits;
+        });
+      }
+    }
+
+    // If offline and user has NEVER logged in on this device:
+    // Requirement #5: Display "You're offline. Please connect to the internet for first-time login."
+    if (!foundProfile) {
+      if (!isOnline) {
+        throw new Error("You're offline. Please connect to the internet for first-time login.");
+      }
+      throw new Error('Account not found. Please verify your credentials or sign up.');
+    }
+
+    // Verify Password against stored SHA-256 hash (or plaintext during legacy migration)
+    const enteredHash = await hashPassword(password);
+    const isPasswordValid =
+      foundProfile.password_hash === enteredHash ||
+      foundProfile.password === password;
+
+    if (!isPasswordValid) {
       throw new Error('Invalid email or password. Please check your credentials.');
     }
 
+    const user = {
+      id: foundProfile.id,
+      name: foundProfile.full_name || foundProfile.name || foundProfile.email.split('@')[0],
+      email: foundProfile.email,
+      mobile_number: foundProfile.mobile_number || ''
+    };
+
     const session = {
-      user: {
-        id: found.id,
-        name: found.name,
-        email: found.email
-      },
+      user,
       token: 'session_' + Date.now()
     };
 
     writeStorage(STORAGE_KEYS.SESSION, session);
-    this.notifyAuthChange(session.user);
-    return { user: session.user, session };
+    this.notifyAuthChange(user);
+    return { user, session };
   },
 
   async logout() {
-    if (isSupabaseConfigured() && supabase) {
+    if (syncService.getIsOnline() && isSupabaseConfigured() && supabase) {
       try {
         await supabase.auth.signOut();
       } catch (e) {
         console.warn('Supabase signOut error:', e);
       }
     }
-    localStorage.removeItem(STORAGE_KEYS.SESSION);
+    if (typeof localStorage !== 'undefined') {
+      localStorage.removeItem(STORAGE_KEYS.SESSION);
+    }
     this.notifyAuthChange(null);
     return true;
   },
@@ -200,7 +375,7 @@ export const api = {
   },
 
   // =========================================================================
-  // 2. User-Specific Medicines Database (CRUD with RLS)
+  // 2. User-Specific Medicines Database (Dexie.js Offline-First + Supabase Sync)
   // =========================================================================
 
   getUserMedicinesKey(userId) {
@@ -211,26 +386,54 @@ export const api = {
     return `${STORAGE_KEYS.LOGS_PREFIX}${userId}`;
   },
 
+  /**
+   * Retrieves all medicines for the current user.
+   * Immediate data source: Local IndexedDB / Dexie.js
+   */
   async getMedicines() {
     const user = await this.getCurrentUser();
     if (!user) return [];
 
-    if (isSupabaseConfigured() && supabase) {
-      try {
-        const { data, error } = await supabase
-          .from('medicines')
-          .select('*')
-          .eq('user_id', user.id)
-          .order('created_at', { ascending: false });
-        if (!error && data) return data;
-      } catch (e) {
-        console.warn('Supabase fetch medicines failed, fallback to local:', e);
+    let localMeds = [];
+
+    // 1. Read from Dexie immediately
+    try {
+      localMeds = await db.medicines
+        .where('user_id')
+        .equals(user.id)
+        .filter((m) => m._syncStatus !== 'pending_delete')
+        .reverse()
+        .sortBy('created_at');
+    } catch (e) {
+      console.warn('Dexie read failed, fallback to localStorage:', e);
+    }
+
+    // 2. If Dexie is empty, check localStorage backup
+    if (!localMeds || localMeds.length === 0) {
+      const stored = readStorage(this.getUserMedicinesKey(user.id), []);
+      if (stored && stored.length > 0) {
+        localMeds = stored;
+        // Warm Dexie cache
+        try {
+          for (const m of stored) {
+            await db.medicines.put({ ...m, _syncStatus: 'synced' });
+          }
+        } catch (e) {}
       }
     }
 
-    return readStorage(this.getUserMedicinesKey(user.id), []);
+    // 3. Trigger silent background sync if online
+    if (syncService.getIsOnline()) {
+      syncService.triggerSync(true).catch(() => {});
+    }
+
+    return localMeds;
   },
 
+  /**
+   * Adds a new medicine.
+   * Requirements #1, #2, #3: Saved locally immediately, never blocks on network error.
+   */
   async addMedicine(medicineData) {
     const user = await this.getCurrentUser();
     if (!user) throw new Error('Authentication required to add medicine.');
@@ -248,53 +451,59 @@ export const api = {
       start_date: medicineData.start_date || new Date().toISOString().split('T')[0],
       end_date: medicineData.end_date || null,
       notes: (medicineData.notes || '').trim(),
-      created_at: new Date().toISOString()
+      created_at: new Date().toISOString(),
+      _syncStatus: syncService.getIsOnline() ? 'pending_insert' : 'pending_insert'
     };
 
-    if (isSupabaseConfigured() && supabase) {
-      try {
-        const { data, error } = await supabase
-          .from('medicines')
-          .insert([newMed])
-          .select()
-          .single();
-        if (!error && data) {
-          return data;
-        }
-      } catch (e) {
-        console.warn('Supabase insert failed, fallback to local:', e);
-      }
+    // 1. Save locally to Dexie IndexedDB immediately
+    try {
+      await db.medicines.put(newMed);
+    } catch (e) {
+      console.warn('Dexie insert warning:', e);
     }
 
-    // Local DB insert (scoped to user.id)
+    // 2. Backup to localStorage for node testing & persistence
     const list = readStorage(this.getUserMedicinesKey(user.id), []);
     list.unshift(newMed);
     writeStorage(this.getUserMedicinesKey(user.id), list);
-    return newMed;
+
+    // 3. Queue / trigger sync
+    const isOnline = syncService.getIsOnline();
+    if (isOnline) {
+      syncService.triggerSync(true).catch(() => {});
+    }
+
+    return {
+      ...newMed,
+      isOfflineSaved: !isOnline
+    };
   },
 
   async updateMedicine(id, updates) {
     const user = await this.getCurrentUser();
     if (!user) throw new Error('Authentication required.');
 
-    if (isSupabaseConfigured() && supabase) {
-      try {
-        const { data, error } = await supabase
-          .from('medicines')
-          .update(updates)
-          .eq('id', id)
-          .eq('user_id', user.id)
-          .select()
-          .single();
-        if (!error && data) return data;
-      } catch (e) {
-        console.warn('Supabase update failed:', e);
+    // 1. Update in Dexie
+    try {
+      const existing = await db.medicines.get(id);
+      if (existing) {
+        await db.medicines.update(id, {
+          ...updates,
+          _syncStatus: 'pending_update'
+        });
       }
+    } catch (e) {}
+
+    // 2. Update in localStorage
+    const list = readStorage(this.getUserMedicinesKey(user.id), []);
+    const updated = list.map((m) => (m.id === id ? { ...m, ...updates, _syncStatus: 'pending_update' } : m));
+    writeStorage(this.getUserMedicinesKey(user.id), updated);
+
+    // 3. Sync if online
+    if (syncService.getIsOnline()) {
+      syncService.triggerSync(true).catch(() => {});
     }
 
-    const list = readStorage(this.getUserMedicinesKey(user.id), []);
-    const updated = list.map((m) => (m.id === id ? { ...m, ...updates } : m));
-    writeStorage(this.getUserMedicinesKey(user.id), updated);
     return updated.find((m) => m.id === id);
   },
 
@@ -302,67 +511,69 @@ export const api = {
     const user = await this.getCurrentUser();
     if (!user) throw new Error('Authentication required.');
 
-    if (isSupabaseConfigured() && supabase) {
-      try {
-        await supabase
-          .from('medicines')
-          .delete()
-          .eq('id', id)
-          .eq('user_id', user.id);
-      } catch (e) {
-        console.warn('Supabase delete error:', e);
+    // 1. Mark or delete in Dexie
+    try {
+      if (syncService.getIsOnline()) {
+        await db.medicines.delete(id);
+      } else {
+        await db.medicines.update(id, { _syncStatus: 'pending_delete' });
       }
-    }
+      // Also clean up local logs
+      await db.medicine_logs.where('medicine_id').equals(id).delete();
+    } catch (e) {}
 
+    // 2. Remove from localStorage
     const list = readStorage(this.getUserMedicinesKey(user.id), []);
     const filtered = list.filter((m) => m.id !== id);
     writeStorage(this.getUserMedicinesKey(user.id), filtered);
 
-    // Also clean up related logs
     const logs = readStorage(this.getUserLogsKey(user.id), []);
     const filteredLogs = logs.filter((l) => l.medicine_id !== id);
     writeStorage(this.getUserLogsKey(user.id), filteredLogs);
+
+    // 3. Trigger sync
+    if (syncService.getIsOnline()) {
+      syncService.triggerSync(true).catch(() => {});
+    }
 
     return true;
   },
 
   // =========================================================================
-  // 3. Medicine Logs & Today's Schedule (Status: taken / pending / upcoming / missed)
+  // 3. Medicine Logs & Today's Schedule
   // =========================================================================
 
   async getMedicineLogs() {
     const user = await this.getCurrentUser();
     if (!user) return [];
 
-    if (isSupabaseConfigured() && supabase) {
-      try {
-        const { data, error } = await supabase
-          .from('medicine_logs')
-          .select('*')
-          .eq('user_id', user.id)
-          .order('created_at', { ascending: false });
-        if (!error && data) return data;
-      } catch (e) {
-        console.warn('Supabase logs error:', e);
-      }
+    let logs = [];
+    try {
+      logs = await db.medicine_logs
+        .where('user_id')
+        .equals(user.id)
+        .reverse()
+        .sortBy('created_at');
+    } catch (e) {}
+
+    if (!logs || logs.length === 0) {
+      logs = readStorage(this.getUserLogsKey(user.id), []);
     }
 
-    return readStorage(this.getUserLogsKey(user.id), []);
+    return logs;
   },
 
-  // Calculate dynamic status for today based on real database records
   calculateStatus(scheduledTimeStr, logForToday) {
     if (logForToday && logForToday.status === 'taken') {
-      return { status: 'taken', takenAt: logForToday.taken_at };
+      return { status: 'taken', takenAt: logForToday.taken_at, diffMinutes: null };
     }
 
-    // Parse scheduled time (e.g., "08:00 AM", "10:30 PM", "14:00")
     const now = new Date();
     const scheduledDate = new Date();
 
-    const parts = scheduledTimeStr.match(/(\d+):(\d+)\s*(AM|PM)?/i);
+    const parts = (scheduledTimeStr || '').match(/(\d+):(\d+)\s*(AM|PM)?/i);
     if (!parts) {
-      return { status: 'upcoming', takenAt: null };
+      return { status: 'upcoming', takenAt: null, diffMinutes: null };
     }
 
     let hours = parseInt(parts[1], 10);
@@ -374,18 +585,18 @@ export const api = {
 
     scheduledDate.setHours(hours, minutes, 0, 0);
 
-    const diffMinutes = (now - scheduledDate) / (1000 * 60);
+    const diffMinutes = (scheduledDate.getTime() - now.getTime()) / (1000 * 60);
 
     // If scheduled time is more than 5 minutes in future -> upcoming
-    if (diffMinutes < -5) {
-      return { status: 'upcoming', takenAt: null };
+    if (diffMinutes > 5) {
+      return { status: 'upcoming', takenAt: null, diffMinutes: Math.round(diffMinutes) };
     }
-    // If within 5 minutes before or up to 60 minutes after -> pending (due now / soon)
-    if (diffMinutes >= -5 && diffMinutes <= 60) {
-      return { status: 'pending', takenAt: null };
+    // If within 5 minutes before up to 60 minutes after -> pending (due now / soon)
+    if (diffMinutes <= 5 && diffMinutes >= -60) {
+      return { status: 'pending', takenAt: null, diffMinutes: Math.round(diffMinutes) };
     }
     // If more than 60 minutes past -> missed
-    return { status: 'missed', takenAt: null };
+    return { status: 'missed', takenAt: null, diffMinutes: Math.round(diffMinutes) };
   },
 
   async getTodaySchedule() {
@@ -395,19 +606,19 @@ export const api = {
     const todayStr = new Date().toISOString().split('T')[0];
 
     return medicines.map((med) => {
-      // Find today's log for this medicine
       const todayLog = logs.find(
         (l) => l.medicine_id === med.id && (l.created_at || '').startsWith(todayStr)
       );
 
-      const { status, takenAt } = this.calculateStatus(med.schedule_time, todayLog);
+      const { status, takenAt, diffMinutes } = this.calculateStatus(med.schedule_time, todayLog);
 
       return {
         ...med,
         time: med.schedule_time,
         meal: med.meal_instruction,
         status,
-        takenAt: takenAt || (todayLog?.status === 'taken' ? todayLog.taken_at : null)
+        takenAt: takenAt || (todayLog?.status === 'taken' ? todayLog.taken_at : null),
+        diffMinutes
       };
     });
   },
@@ -434,18 +645,16 @@ export const api = {
       scheduled_time: med ? med.schedule_time : 'Scheduled',
       taken_at: timeStr,
       status: 'taken',
-      created_at: now.toISOString()
+      created_at: now.toISOString(),
+      _syncStatus: 'pending_insert'
     };
 
-    if (isSupabaseConfigured() && supabase) {
-      try {
-        await supabase.from('medicine_logs').insert([logEntry]);
-      } catch (e) {
-        console.warn('Supabase log insert error:', e);
-      }
-    }
+    // 1. Put into Dexie
+    try {
+      await db.medicine_logs.put(logEntry);
+    } catch (e) {}
 
-    // Local DB insert / update for today
+    // 2. Put into localStorage
     const logs = readStorage(this.getUserLogsKey(user.id), []);
     const existingIndex = logs.findIndex(
       (l) => l.medicine_id === medicineId && (l.created_at || '').startsWith(todayStr)
@@ -459,14 +668,19 @@ export const api = {
     }
     writeStorage(this.getUserLogsKey(user.id), logs);
 
-    // Play subtle audio confirmation chime
+    // 3. Play audio confirmation
     this.playGentleChime('success');
+
+    // 4. Background sync
+    if (syncService.getIsOnline()) {
+      syncService.triggerSync(true).catch(() => {});
+    }
 
     return logEntry;
   },
 
   // =========================================================================
-  // 4. Adherence & History (Calculated dynamically from real database logs)
+  // 4. Adherence & History
   // =========================================================================
 
   async getAdherenceStats() {
@@ -526,7 +740,85 @@ export const api = {
   },
 
   // =========================================================================
-  // 5. Hardware Integration & IoT Signal Ingestion
+  // 5. Intelligent SMS Reminder Queue (Requirements #9, #10, #11)
+  // =========================================================================
+
+  async queueSmsNotification({ medicine, reminderType = 'advance_5min' }) {
+    const user = await this.getCurrentUser();
+    if (!user || !user.mobile_number) return null;
+
+    const phone = user.mobile_number;
+    const medName = medicine.name;
+    const dosage = `${medicine.dosage} ${medicine.dosage_unit || ''}`.trim();
+    const scheduledTime = medicine.schedule_time || medicine.time;
+
+    let message = '';
+    if (reminderType === 'advance_5min') {
+      message = `SmartMed Reminder: ${medName} ${dosage} is due in 5 minutes.`;
+    } else if (reminderType === 'due_now') {
+      message = `SmartMed: It is time to take your ${medName} ${dosage} medicine.`;
+    } else {
+      message = `SmartMed Reminder: Your ${medName} ${dosage} dose is due at ${scheduledTime}.`;
+    }
+
+    const smsRecord = {
+      id: 'sms_q_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+      user_id: user.id,
+      medicine_id: medicine.id,
+      medicine_name: medName,
+      phone,
+      message,
+      reminder_type: reminderType,
+      scheduled_for: scheduledTime,
+      created_at: new Date().toISOString(),
+      status: syncService.getIsOnline() ? 'sent' : 'pending',
+      error: null
+    };
+
+    if (syncService.getIsOnline()) {
+      try {
+        const res = await fetch('/api/sms/send', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            phone,
+            message,
+            medicineName: medName,
+            scheduledTime,
+            reminderType
+          })
+        });
+        if (res.ok) {
+          smsRecord.status = 'sent';
+        } else {
+          smsRecord.status = 'pending';
+        }
+      } catch (err) {
+        smsRecord.status = 'pending';
+        console.log('[SmartMed SMS] Offline or server unreachable, SMS queued as pending.');
+      }
+    } else {
+      smsRecord.status = 'pending';
+      console.log('[SmartMed SMS] Offline mode: SMS queued for when internet returns.');
+    }
+
+    try {
+      await db.pending_sms.put(smsRecord);
+    } catch (e) {}
+
+    return smsRecord;
+  },
+
+  async getPendingSms() {
+    try {
+      return await db.pending_sms.toArray();
+    } catch (e) {
+      return [];
+    }
+  },
+
+  // =========================================================================
+  // 6. Hardware Integration & IoT Signal Ingestion
   // =========================================================================
 
   subscribeHardware(callback) {
@@ -555,32 +847,64 @@ export const api = {
   },
 
   // =========================================================================
-  // 6. Settings & Sound System
+  // 7. Settings, Audio Chime & Theme Persistence (Requirement #18)
   // =========================================================================
 
   async getSettings() {
     const user = await this.getCurrentUser();
+    const savedTheme = typeof localStorage !== 'undefined'
+      ? localStorage.getItem(STORAGE_KEYS.THEME) || 'light'
+      : 'light';
+
     const defaultSettings = {
       reminder5Min: true,
       reminderOnTime: true,
       soundEnabled: true,
       browserNotif: false,
-      theme: 'light'
+      smsReminders: true,
+      theme: savedTheme
     };
+
     if (!user) return defaultSettings;
-    return readStorage(`${STORAGE_KEYS.SETTINGS_PREFIX}${user.id}`, defaultSettings);
+
+    let userSettings = null;
+    try {
+      userSettings = await db.settings.get(user.id);
+    } catch (e) {}
+
+    if (!userSettings) {
+      userSettings = readStorage(`${STORAGE_KEYS.SETTINGS_PREFIX}${user.id}`, defaultSettings);
+    }
+
+    // Ensure theme matches saved
+    if (savedTheme) {
+      userSettings.theme = savedTheme;
+    }
+
+    return userSettings;
   },
 
   async updateSettings(updates) {
     const user = await this.getCurrentUser();
     const current = await this.getSettings();
     const updated = { ...current, ...updates };
+
+    if (updated.theme) {
+      if (typeof localStorage !== 'undefined') {
+        localStorage.setItem(STORAGE_KEYS.THEME, updated.theme);
+      }
+      if (typeof document !== 'undefined') {
+        document.documentElement.setAttribute('data-theme', updated.theme);
+      }
+    }
+
     if (user) {
+      try {
+        await db.settings.put({ user_id: user.id, ...updated });
+      } catch (e) {}
       writeStorage(`${STORAGE_KEYS.SETTINGS_PREFIX}${user.id}`, updated);
     }
-    if (updated.theme) {
-      document.documentElement.setAttribute('data-theme', updated.theme);
-    }
+
     return updated;
   },
 

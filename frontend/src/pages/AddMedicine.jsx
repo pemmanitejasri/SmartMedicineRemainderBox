@@ -53,7 +53,7 @@ export default function AddMedicine({ onNotify }) {
 
     setSaving(true);
     try {
-      await api.addMedicine({
+      const res = await api.addMedicine({
         name: name.trim(),
         dosage: dosageValue.trim(),
         dosage_unit: dosageUnit,
@@ -66,13 +66,23 @@ export default function AddMedicine({ onNotify }) {
         notes: notes.trim()
       });
 
-      // Requirement #7: Show "Medicine added successfully"
-      if (onNotify) {
-        onNotify({
-          title: 'Medicine added successfully',
-          desc: `${name.trim()} (${dosageValue.trim()} ${dosageUnit}) saved to database.`,
-          type: 'success'
-        });
+      // Requirement #3: If added offline, show "Medicine saved. Will sync when internet is available."
+      if (res?.isOfflineSaved) {
+        if (onNotify) {
+          onNotify({
+            title: 'Medicine saved',
+            desc: 'Will sync when internet is available.',
+            type: 'success'
+          });
+        }
+      } else {
+        if (onNotify) {
+          onNotify({
+            title: 'Medicine added successfully',
+            desc: `${name.trim()} (${dosageValue.trim()} ${dosageUnit}) saved to database.`,
+            type: 'success'
+          });
+        }
       }
 
       navigate('/medicines');

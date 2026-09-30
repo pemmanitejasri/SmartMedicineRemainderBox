@@ -1,13 +1,13 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Pill,
   Clock,
   Utensils,
   CheckCircle2,
-  AlertCircle,
   Box,
   Check,
-  Radio
+  Radio,
+  Hourglass
 } from 'lucide-react';
 import StatusBadge from './StatusBadge';
 
@@ -29,7 +29,8 @@ export default function MedicineCard({
     status = 'upcoming',
     takenAt,
     slot,
-    notes
+    notes,
+    isOfflineSaved
   } = medicine;
 
   const displayTime = schedule_time || time;
@@ -39,28 +40,52 @@ export default function MedicineCard({
   const isTaken = status === 'taken';
   const isPending = status === 'pending';
   const isMissed = status === 'missed';
-  const isUpcoming = status === 'upcoming';
 
-  let statusDetail = null;
-  if (isTaken && takenAt) {
-    statusDetail = (
-      <span style={{ fontSize: '0.82rem', color: 'var(--status-taken-text)', fontWeight: 600 }}>
-        Taken at: <strong>{takenAt}</strong>
-      </span>
-    );
-  } else if (isPending) {
-    statusDetail = (
-      <span style={{ fontSize: '0.82rem', color: 'var(--status-pending-text)', fontWeight: 600 }}>
-        Due now
-      </span>
-    );
-  } else if (isMissed) {
-    statusDetail = (
-      <span style={{ fontSize: '0.82rem', color: 'var(--status-missed-text)', fontWeight: 600 }}>
-        Missed dose
-      </span>
-    );
-  }
+  // Compute countdown dynamically when dose is due soon (Requirement #13)
+  const [countdownTag, setCountdownTag] = useState(null);
+
+  useEffect(() => {
+    const calculateCountdown = () => {
+      if (isTaken || isMissed) {
+        setCountdownTag(null);
+        return;
+      }
+
+      const timeStr = displayTime || '';
+      const parts = timeStr.match(/(\d+):(\d+)\s*(AM|PM)?/i);
+      if (!parts) {
+        setCountdownTag(null);
+        return;
+      }
+
+      let hours = parseInt(parts[1], 10);
+      const minutes = parseInt(parts[2], 10);
+      const meridiem = parts[3] ? parts[3].toUpperCase() : null;
+
+      if (meridiem === 'PM' && hours < 12) hours += 12;
+      if (meridiem === 'AM' && hours === 12) hours = 0;
+
+      const now = new Date();
+      const scheduled = new Date();
+      scheduled.setHours(hours, minutes, 0, 0);
+
+      const diffSecs = Math.floor((scheduled.getTime() - now.getTime()) / 1000);
+      const diffMins = Math.ceil(diffSecs / 60);
+
+      // Only show countdown information when useful (Requirement #13)
+      if (diffMins > 0 && diffMins <= 15) {
+        setCountdownTag(`Due in ${diffMins} min${diffMins > 1 ? 's' : ''}`);
+      } else if (diffSecs <= 0 && diffSecs >= -3600) {
+        setCountdownTag('Due now');
+      } else {
+        setCountdownTag(null);
+      }
+    };
+
+    calculateCountdown();
+    const interval = setInterval(calculateCountdown, 10000);
+    return () => clearInterval(interval);
+  }, [displayTime, isTaken, isMissed]);
 
   return (
     <div
@@ -138,7 +163,33 @@ export default function MedicineCard({
 
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '0.35rem' }}>
           <StatusBadge status={status} />
-          {statusDetail}
+
+          {/* Contextual Countdown Tag (Requirement #13) */}
+          {countdownTag && (
+            <span
+              style={{
+                fontSize: '0.78rem',
+                fontWeight: 700,
+                color: 'var(--status-pending-text)',
+                background: 'var(--status-pending-bg)',
+                border: '1px solid var(--status-pending-border)',
+                borderRadius: 'var(--radius-full)',
+                padding: '0.15rem 0.5rem',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '0.3rem'
+              }}
+            >
+              <Hourglass size={12} />
+              <span>{countdownTag}</span>
+            </span>
+          )}
+
+          {isTaken && takenAt && (
+            <span style={{ fontSize: '0.8rem', color: 'var(--status-taken-text)', fontWeight: 600 }}>
+              Taken at: <strong>{takenAt}</strong>
+            </span>
+          )}
         </div>
       </div>
 

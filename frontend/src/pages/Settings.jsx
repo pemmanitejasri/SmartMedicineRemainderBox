@@ -128,11 +128,16 @@ export default function Settings({ onNotify }) {
             <div style={{ fontSize: '0.88rem', color: 'var(--text-muted)' }}>
               {currentUser?.email || 'Logged in'}
             </div>
+            {currentUser?.mobile_number && (
+              <div style={{ fontSize: '0.85rem', color: 'var(--primary-500)', fontWeight: 600, marginTop: '4px' }}>
+                Registered Mobile: <strong>{currentUser.mobile_number}</strong>
+              </div>
+            )}
           </div>
         </div>
       </div>
 
-      {/* Reminder & Alarm Settings (Requirements #11, #12, #13) */}
+      {/* Reminder & Alarm Settings (Requirements #9, #11, #12) */}
       <div className="card" style={{ padding: '1.5rem 1.75rem' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1.25rem', flexWrap: 'wrap', gap: '0.75rem' }}>
           <div>
@@ -140,7 +145,7 @@ export default function Settings({ onNotify }) {
               Reminder & Alarm System
             </h2>
             <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
-              Configure proactive alerts for scheduled medication times
+              Configure proactive alerts and cellular SMS reminders
             </p>
           </div>
 
@@ -155,6 +160,26 @@ export default function Settings({ onNotify }) {
         </div>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+          {/* SMS Reminders Toggle (Requirement #9) */}
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.85rem 1rem', background: 'var(--bg-card-subtle)', borderRadius: 'var(--radius-md)' }}>
+            <div>
+              <div style={{ fontWeight: 700, fontSize: '0.95rem', color: 'var(--text-primary)' }}>
+                Cellular SMS Reminders
+              </div>
+              <div style={{ fontSize: '0.82rem', color: 'var(--text-muted)' }}>
+                Sends SMS messages for scheduled medicines to {currentUser?.mobile_number || 'your mobile number'}
+              </div>
+            </div>
+            <label style={{ cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={settings.smsReminders !== false}
+                onChange={() => handleToggleSetting('smsReminders')}
+                style={{ width: '20px', height: '20px', accentColor: 'var(--primary-500)', cursor: 'pointer' }}
+              />
+            </label>
+          </div>
+
           {/* 5-minute advance reminder */}
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.85rem 1rem', background: 'var(--bg-card-subtle)', borderRadius: 'var(--radius-md)' }}>
             <div>

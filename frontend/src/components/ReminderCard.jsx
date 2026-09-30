@@ -96,8 +96,8 @@ export default function ReminderCard({ medicine, onTake, onSimulateIoT }) {
     <div
       className="card reminder-hero-card"
       style={{
-        background: 'linear-gradient(135deg, #ffffff 0%, #f0f7fc 100%)',
-        border: '1px solid #bfdbfe',
+        background: 'var(--bg-card)',
+        border: '1px solid var(--border-light)',
         boxShadow: 'var(--shadow-lg)',
         position: 'relative',
         overflow: 'hidden'

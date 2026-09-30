@@ -1,29 +1,33 @@
 import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Activity, Mail, Lock, ShieldCheck, Check } from 'lucide-react';
+import { Activity, Mail, Lock, ShieldCheck, Check, Eye, EyeOff, Smartphone, WifiOff } from 'lucide-react';
 import { api } from '../services/api';
+import { syncService } from '../services/syncService';
 
 export default function Login({ onNotify }) {
   const navigate = useNavigate();
 
-  const [email, setEmail] = useState('');
+  const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [rememberMe, setRememberMe] = useState(true);
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
+
+  const isOnline = syncService.getIsOnline();
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setErrorMsg('');
 
-    if (!email.trim() || !password) {
-      setErrorMsg('Please enter both email and password.');
+    if (!identifier.trim() || !password) {
+      setErrorMsg('Please enter your email or mobile number, and password.');
       return;
     }
 
     setLoading(true);
     try {
-      const res = await api.login({ email, password, rememberMe });
+      const res = await api.login({ identifier, password, rememberMe });
       if (onNotify) {
         onNotify({
           title: 'Logged in successfully',
@@ -33,11 +37,12 @@ export default function Login({ onNotify }) {
       }
       navigate('/dashboard', { replace: true });
     } catch (err) {
-      setErrorMsg(err.message || 'Unable to sign in. Please verify your email and password.');
+      const msg = err.message || 'Unable to sign in. Please verify your credentials.';
+      setErrorMsg(msg);
       if (onNotify) {
         onNotify({
           title: 'Sign in failed',
-          desc: err.message || 'Invalid credentials.',
+          desc: msg,
           type: 'error'
         });
       }
@@ -47,16 +52,7 @@ export default function Login({ onNotify }) {
   };
 
   return (
-    <div
-      style={{
-        minHeight: '100vh',
-        background: 'radial-gradient(ellipse at top, #f0f7fc 0%, #e2eef7 100%)',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        padding: '2rem 1.5rem'
-      }}
-    >
+    <div className="auth-page-container">
       <div
         style={{
           width: '100%',
@@ -73,7 +69,7 @@ export default function Login({ onNotify }) {
         {/* Left Side: Product Showcase */}
         <div
           style={{
-            background: 'linear-gradient(145deg, #0f172a 0%, #1e293b 50%, #0369a1 100%)',
+            background: 'linear-gradient(145deg, #091326 0%, #0f2042 50%, #0369a1 100%)',
             color: '#ffffff',
             padding: '3rem 2.5rem',
             display: 'flex',
@@ -131,37 +127,46 @@ export default function Login({ onNotify }) {
                 <div style={{ width: '24px', height: '24px', borderRadius: '50%', background: 'rgba(56, 189, 248, 0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#38bdf8', flexShrink: 0 }}>
                   <Check size={14} strokeWidth={3} />
                 </div>
-                <span>Live schedule tracking and automatic dosage reminders</span>
+                <span>Works 100% offline with local IndexedDB storage</span>
               </div>
 
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', color: '#e2e8f0', fontSize: '0.92rem' }}>
                 <div style={{ width: '24px', height: '24px', borderRadius: '50%', background: 'rgba(56, 189, 248, 0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#38bdf8', flexShrink: 0 }}>
                   <Check size={14} strokeWidth={3} />
                 </div>
-                <span>Real-time hardware sensors detect when medication is taken</span>
+                <span>Local alarms & auto-syncing mobile SMS notifications</span>
               </div>
 
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', color: '#e2e8f0', fontSize: '0.92rem' }}>
                 <div style={{ width: '24px', height: '24px', borderRadius: '50%', background: 'rgba(56, 189, 248, 0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#38bdf8', flexShrink: 0 }}>
                   <Check size={14} strokeWidth={3} />
                 </div>
-                <span>Adherence reports for personal care and caregiver monitoring</span>
+                <span>IoT Smart Box sensor detection with hardware compatibility</span>
               </div>
             </div>
           </div>
 
           <div style={{ marginTop: '2rem', display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.8rem', color: '#94a3b8' }}>
             <ShieldCheck size={16} color="#34d399" />
-            <span>Encrypted patient authentication & HIPAA-compliant isolation</span>
+            <span>Encrypted patient authentication & offline-first security</span>
           </div>
         </div>
 
         {/* Right Side: Login Form */}
-        <div style={{ padding: '3rem 2.5rem', display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
+        <div style={{ padding: '3rem 2.5rem', display: 'flex', flexDirection: 'column', justifyContent: 'center', background: 'var(--bg-card)' }}>
           <div style={{ marginBottom: '1.75rem' }}>
-            <h2 style={{ fontSize: '1.6rem', fontWeight: 800, color: 'var(--text-primary)', letterSpacing: '-0.02em' }}>
-              Sign In
-            </h2>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem' }}>
+              <h2 style={{ fontSize: '1.6rem', fontWeight: 800, color: 'var(--text-primary)', letterSpacing: '-0.02em' }}>
+                Sign In
+              </h2>
+
+              {!isOnline && (
+                <span className="connection-badge offline" title="Offline mode active">
+                  <WifiOff size={13} />
+                  <span>Offline Mode</span>
+                </span>
+              )}
+            </div>
             <p style={{ fontSize: '0.9rem', color: 'var(--text-muted)', marginTop: '4px' }}>
               Access your personalized medicine schedule
             </p>
@@ -185,10 +190,10 @@ export default function Login({ onNotify }) {
           )}
 
           <form onSubmit={handleSubmit}>
-            {/* Email */}
+            {/* Email or Mobile Number (Requirement #7) */}
             <div className="form-group">
-              <label className="form-label" htmlFor="login-email">
-                Email
+              <label className="form-label" htmlFor="login-identifier">
+                <span>Email or Mobile Number</span>
               </label>
               <div style={{ position: 'relative' }}>
                 <Mail
@@ -196,22 +201,23 @@ export default function Login({ onNotify }) {
                   style={{ position: 'absolute', left: '14px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }}
                 />
                 <input
-                  id="login-email"
-                  type="email"
+                  id="login-identifier"
+                  type="text"
                   className="form-input"
                   style={{ paddingLeft: '2.6rem' }}
-                  placeholder="name@example.com"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="name@example.com or +91 9876543210"
+                  value={identifier}
+                  onChange={(e) => setIdentifier(e.target.value)}
+                  autoComplete="username"
                   required
                 />
               </div>
             </div>
 
-            {/* Password */}
+            {/* Password with Eye Icon Toggle (Requirement #15) */}
             <div className="form-group">
               <label className="form-label" htmlFor="login-password">
-                Password
+                <span>Password</span>
               </label>
               <div style={{ position: 'relative' }}>
                 <Lock
@@ -220,14 +226,24 @@ export default function Login({ onNotify }) {
                 />
                 <input
                   id="login-password"
-                  type="password"
+                  type={showPassword ? 'text' : 'password'}
                   className="form-input"
-                  style={{ paddingLeft: '2.6rem' }}
+                  style={{ paddingLeft: '2.6rem', paddingRight: '2.8rem' }}
                   placeholder="Enter your password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
+                  autoComplete="current-password"
                   required
                 />
+                <button
+                  type="button"
+                  className="password-eye-btn"
+                  onClick={() => setShowPassword(!showPassword)}
+                  aria-label={showPassword ? 'Hide password' : 'Show password'}
+                  title={showPassword ? 'Hide password' : 'Show password'}
+                >
+                  {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                </button>
               </div>
             </div>
 
@@ -240,7 +256,7 @@ export default function Login({ onNotify }) {
                   onChange={(e) => setRememberMe(e.target.checked)}
                   style={{ width: '16px', height: '16px', accentColor: 'var(--primary-500)', cursor: 'pointer' }}
                 />
-                <span>Remember me</span>
+                <span>Remember on this device</span>
               </label>
             </div>
 

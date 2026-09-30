@@ -9,14 +9,22 @@ import {
   PlusCircle,
   LogOut,
   User,
-  Radio
+  RefreshCw,
+  Phone
 } from 'lucide-react';
 import { api } from '../services/api';
+import { syncService } from '../services/syncService';
 
 export default function Navbar({ onNotify }) {
   const navigate = useNavigate();
   const [currentUser, setCurrentUser] = useState(null);
   const [showUserMenu, setShowUserMenu] = useState(false);
+  const [connStatus, setConnStatus] = useState({
+    isOnline: syncService.getIsOnline(),
+    syncState: syncService.getSyncState(),
+    pendingCount: 0,
+    label: syncService.getIsOnline() ? 'Synced' : 'Offline'
+  });
 
   useEffect(() => {
     let mounted = true;
@@ -24,13 +32,18 @@ export default function Navbar({ onNotify }) {
       if (mounted) setCurrentUser(u);
     });
 
-    const unsubscribe = api.onAuthStateChange((u) => {
+    const unsubscribeAuth = api.onAuthStateChange((u) => {
       if (mounted) setCurrentUser(u);
+    });
+
+    const unsubscribeSync = syncService.subscribeStatus((status) => {
+      if (mounted) setConnStatus(status);
     });
 
     return () => {
       mounted = false;
-      unsubscribe();
+      unsubscribeAuth();
+      unsubscribeSync();
     };
   }, []);
 
@@ -45,6 +58,19 @@ export default function Navbar({ onNotify }) {
       });
     }
     navigate('/login', { replace: true });
+  };
+
+  const handleManualSync = () => {
+    if (connStatus.isOnline) {
+      syncService.triggerSync(false);
+      if (onNotify) {
+        onNotify({
+          title: 'Synchronizing Database',
+          desc: 'Syncing local changes with cloud database...',
+          type: 'info'
+        });
+      }
+    }
   };
 
   return (
@@ -96,8 +122,40 @@ export default function Navbar({ onNotify }) {
           </NavLink>
         </nav>
 
-        {/* Right side widgets: Add Dose + Profile & Logout */}
+        {/* Right side widgets: Connection Status + Add Dose + Profile & Logout */}
         <div className="navbar-right">
+          {/* Small Connection Status Badge (Requirement #4 & #19) */}
+          <button
+            type="button"
+            onClick={handleManualSync}
+            className={`connection-badge ${
+              !connStatus.isOnline
+                ? 'offline'
+                : connStatus.syncState === 'syncing'
+                ? 'syncing'
+                : 'online'
+            }`}
+            title={connStatus.label}
+            style={{ cursor: connStatus.isOnline ? 'pointer' : 'default', background: 'none' }}
+          >
+            {!connStatus.isOnline ? (
+              <>
+                <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: 'var(--status-pending-dot)' }} />
+                <span>{connStatus.pendingCount > 0 ? 'Offline (Saved)' : 'Offline'}</span>
+              </>
+            ) : connStatus.syncState === 'syncing' ? (
+              <>
+                <RefreshCw size={12} className="sync-spinner" color="var(--primary-500)" />
+                <span>Syncing...</span>
+              </>
+            ) : (
+              <>
+                <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: 'var(--status-taken-dot)' }} />
+                <span>Synced</span>
+              </>
+            )}
+          </button>
+
           {/* Quick Add Medicine Button */}
           <Link
             to="/add-medicine"
@@ -130,7 +188,7 @@ export default function Navbar({ onNotify }) {
                   position: 'absolute',
                   right: 0,
                   top: '115%',
-                  width: '230px',
+                  width: '240px',
                   background: 'var(--bg-card)',
                   borderRadius: 'var(--radius-md)',
                   border: '1px solid var(--border-light)',
@@ -146,6 +204,12 @@ export default function Navbar({ onNotify }) {
                   <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {currentUser?.email}
                   </div>
+                  {currentUser?.mobile_number && (
+                    <div style={{ fontSize: '0.75rem', color: 'var(--primary-500)', marginTop: '3px', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+                      <Phone size={11} />
+                      <span>{currentUser.mobile_number}</span>
+                    </div>
+                  )}
                 </div>
 
                 <Link
