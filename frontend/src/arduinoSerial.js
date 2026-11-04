@@ -1,4 +1,7 @@
+
 import { api } from './services/api';
+
+const MAX_MEDICINES = 16;
 
 let port = null;
 let reader = null;
@@ -172,6 +175,13 @@ function rejectAllAcks(message) {
 function handleIncomingLine(line) {
   console.log('[Arduino IN]:', line);
 
+  if (line === 'PONG') {
+    // Backward compatibility with older firmware versions.
+    resolveAck('PING', 'ACK,PING,PONG');
+    publishRawMessage(line);
+    return;
+  }
+
   if (line.startsWith('ACK,')) {
     const parts = line.split(',');
     resolveAck(parts[1]?.trim(), line);
@@ -181,11 +191,24 @@ function handleIncomingLine(line) {
 
   if (line.startsWith('ERR,')) {
     const parts = line.split(',');
+    const action = parts[1]?.trim();
 
-    rejectAck(
-      parts[1]?.trim(),
-      new Error(`Arduino error: ${line}`)
-    );
+    const supportedActions = [
+      'PING',
+      'SYNC_TIME',
+      'GET_TIME',
+      'SET',
+      'DEL',
+      'CLEAR',
+      'TEST'
+    ];
+
+    if (supportedActions.includes(action)) {
+      rejectAck(
+        action,
+        new Error(`Arduino error: ${line}`)
+      );
+    }
 
     publishRawMessage(line);
     return;
@@ -271,16 +294,17 @@ async function startReaderLoop(currentPort, onMessageCallback) {
             try {
               onMessageCallback?.(line);
             } catch (error) {
-              console.error('[SmartMed] Message callback error:', error);
+              console.error(
+                '[SmartMed] Message callback error:',
+                error
+              );
             }
           }
         }
       } finally {
         try {
           currentReader.releaseLock();
-        } catch (error) {
-          // Reader already released.
-        }
+        } catch (error) {}
 
         if (reader === currentReader) {
           reader = null;
@@ -313,7 +337,9 @@ async function executeSerialCommand(
   const action = cleanCommand.split(',')[0];
 
   if (awaitAck && pendingAcks.has(action)) {
-    throw new Error(`Another ${action} command is already pending.`);
+    throw new Error(
+      `Another ${action} command is already pending.`
+    );
   }
 
   let ackPromise = null;
@@ -423,7 +449,6 @@ export async function connectArduino(
     console.log('[SmartMed] USB opened.');
     console.log('[SmartMed] Waiting for Arduino reset...');
 
-    // Many Nano boards reset when USB serial is opened.
     await delay(2000);
 
     let pingSuccess = false;
@@ -453,7 +478,6 @@ export async function connectArduino(
       throw lastError || new Error('Arduino PING failed.');
     }
 
-    // Only now is the connection considered successful.
     notifyStatus('connected');
     onStatusCallback?.('connected');
 
@@ -464,19 +488,35 @@ export async function connectArduino(
     try {
       clockSynced = await syncCurrentTimeToArduino();
     } catch (error) {
-      console.error('[SmartMed] RTC sync failed:', error.message);
+      console.error(
+        '[SmartMed] RTC sync failed:',
+        error.message
+      );
     }
 
     let rtcTimeRequested = false;
 
-    try {
-      await sendToArduino('GET_TIME', false);
-      rtcTimeRequested = true;
-    } catch (error) {
-      console.error('[SmartMed] GET_TIME failed:', error.message);
+    if (clockSynced) {
+      try {
+        await sendToArduino('GET_TIME', false);
+        rtcTimeRequested = true;
+      } catch (error) {
+        console.error(
+          '[SmartMed] GET_TIME failed:',
+          error.message
+        );
+      }
     }
 
-    const scheduleSynced = await resyncScheduleFromDb();
+    let scheduleSynced = false;
+
+    if (clockSynced) {
+      scheduleSynced = await resyncScheduleFromDb();
+    } else {
+      console.error(
+        '[SmartMed] Schedule sync skipped because clock sync failed.'
+      );
+    }
 
     return {
       connected: true,
@@ -544,7 +584,7 @@ export async function sendMedicineReminder(medicine) {
     throw new Error('Invalid medicine reminder time.');
   }
 
-  if (!id || id.includes(',') || id.length > 40) {
+  if (!id || id.includes(',') || id.length > 36) {
     throw new Error('Invalid medicine ID.');
   }
 
@@ -569,7 +609,7 @@ export async function removeMedicineReminder(medicineId) {
 
   const id = String(medicineId || '');
 
-  if (!id || id.includes(',')) {
+  if (!id || id.includes(',') || id.length > 36) {
     throw new Error('Invalid medicine ID.');
   }
 
@@ -621,7 +661,7 @@ export async function triggerHardwareTest() {
     6000
   );
 
-  return result === 'ACK,TEST,OK';
+  return typeof result === 'string' && result.startsWith('ACK,TEST,');
 }
 
 export async function resyncScheduleFromDb() {
@@ -640,40 +680,62 @@ export async function resyncScheduleFromDb() {
       med => med.status !== 'taken'
     );
 
-    if (activeMedicines.length > 10) {
-      throw new Error('Maximum 10 medicine reminders supported.');
+    if (activeMedicines.length > MAX_MEDICINES) {
+      throw new Error(
+        `Maximum ${MAX_MEDICINES} medicine reminders supported. Found ${activeMedicines.length}.`
+      );
     }
 
-    await sendToArduino('CLEAR', true, 6000);
-
-    for (const med of activeMedicines) {
+    // Validate every reminder BEFORE clearing Arduino memory.
+    const validatedMedicines = activeMedicines.map((med, index) => {
       const time = formatTo24Hour(
         med.schedule_time || med.time
       );
 
       const id = String(med.id || '');
 
-      if (!time || !id || id.includes(',') || id.length > 40) {
+      if (!time || !id || id.includes(',') || id.length > 36) {
         throw new Error(
-          `Invalid reminder data for ${med.name || 'medicine'}.`
+          `Invalid reminder data at item ${index + 1}: ${med.name || 'medicine'}.`
         );
       }
 
-      await sendToArduino(
-        `SET,${time},${id}`,
-        true,
-        6000
-      );
+      return {
+        id,
+        time,
+        name: med.name || 'Medicine'
+      };
+    });
 
-      console.log(
-        '[SmartMed] Reminder synchronized:',
-        med.name,
-        time
-      );
+    // Clear old reminders only after validation succeeds.
+    await sendToArduino('CLEAR', true, 6000);
+
+    let syncedCount = 0;
+
+    for (const med of validatedMedicines) {
+      try {
+        await sendToArduino(
+          `SET,${med.time},${med.id}`,
+          true,
+          6000
+        );
+
+        syncedCount++;
+
+        console.log(
+          '[SmartMed] Reminder synchronized:',
+          med.name,
+          med.time
+        );
+      } catch (error) {
+        throw new Error(
+          `Failed to synchronize ${med.name}: ${error.message}. ${syncedCount} reminders were synchronized before the failure.`
+        );
+      }
     }
 
     console.log(
-      `[SmartMed] ${activeMedicines.length} reminders synchronized.`
+      `[SmartMed] ${syncedCount} of ${MAX_MEDICINES} maximum reminders synchronized.`
     );
 
     return true;
@@ -689,7 +751,8 @@ export async function resyncScheduleFromDb() {
 }
 
 async function handleMedicineTakenEvent(id, time) {
-  const actualTime = time || new Date().toLocaleTimeString();
+  const actualTime =
+    time || new Date().toLocaleTimeString();
 
   try {
     await api.receiveHardwareEvent({

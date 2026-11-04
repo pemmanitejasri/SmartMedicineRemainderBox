@@ -1,36 +1,84 @@
-// SmartMed Serial Port Reader for USB-connected Arduino
-// Reads JSON telemetry lines from COM/Serial port and forwards to backend/server.js
+// backend/serial.js
 
-import http from 'http';
+import { SerialPort } from 'serialport';
+import { ReadlineParser } from '@serialport/parser-readline';
 
-const SERIAL_PORT_NAME = process.env.SERIAL_PORT || 'COM3';
-const SERVER_URL = 'http://localhost:5000/api/hardware/event';
+const PORT_NAME = 'COM5';
+const BAUD_RATE = 9600;
 
-console.log(`[SmartMed Serial] Initializing listener on ${SERIAL_PORT_NAME}...`);
-console.log(`[SmartMed Serial] Forwards IR/Pill detection events to ${SERVER_URL}`);
+const arduino = new SerialPort({
+  path: PORT_NAME,
+  baudRate: BAUD_RATE,
+  autoOpen: false
+});
 
-// Helper to post hardware payload to backend server
-export function forwardHardwareEvent(event) {
-  const data = JSON.stringify(event);
-  const options = {
-    hostname: 'localhost',
-    port: 5000,
-    path: '/api/hardware/event',
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Content-Length': data.length
+const parser = arduino.pipe(
+  new ReadlineParser({ delimiter: '\n' })
+);
+
+let isConnected = false;
+
+export function connectArduino() {
+  return new Promise((resolve, reject) => {
+    if (arduino.isOpen) {
+      isConnected = true;
+      return resolve(true);
     }
-  };
 
-  const req = http.request(options, res => {
-    console.log(`[SmartMed Serial] Forwarded event: ${res.statusCode}`);
+    arduino.open((error) => {
+      if (error) {
+        isConnected = false;
+        return reject(error);
+      }
+
+      isConnected = true;
+      console.log('Arduino connected on', PORT_NAME);
+
+      resolve(true);
+    });
   });
-
-  req.on('error', err => {
-    console.warn('[SmartMed Serial] Bridge server not reached:', err.message);
-  });
-
-  req.write(data);
-  req.end();
 }
+
+export function getArduinoStatus() {
+  return {
+    connected: isConnected,
+    port: PORT_NAME
+  };
+}
+
+export function sendToArduino(command) {
+  return new Promise((resolve, reject) => {
+    if (!arduino.isOpen) {
+      return reject(new Error('Arduino is not connected'));
+    }
+
+    arduino.write(command + '\n', (error) => {
+      if (error) return reject(error);
+
+      arduino.drain((drainError) => {
+        if (drainError) return reject(drainError);
+
+        console.log('Sent to Arduino:', command);
+        resolve(true);
+      });
+    });
+  });
+}
+
+parser.on('data', (data) => {
+  const message = data.trim();
+
+  if (message) {
+    console.log('Arduino response:', message);
+  }
+});
+
+arduino.on('error', (error) => {
+  isConnected = false;
+  console.error('Arduino serial error:', error.message);
+});
+
+arduino.on('close', () => {
+  isConnected = false;
+  console.log('Arduino disconnected');
+});

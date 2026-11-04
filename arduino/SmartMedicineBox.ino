@@ -20,7 +20,7 @@
     5. Non-blocking alarm: LED on D2 lights up, Buzzer on D9 sounds pulsing tone.
     6. Real alarm persists until physical push button on D6 is pressed (with 10-min unattended safety limit).
     7. Push button on D6 debounced: stops alarm and transmits MEDICINE_TAKEN event.
-    8. Safe Hardware Test command: TEST immediately returns ACK,TEST,HARDWARE_OK
+    8. Safe Hardware Test command: TEST immediately returns ACK,TEST,OK
        and runs LED & Buzzer for 1.5 seconds.
     9. Real-time Clock synchronization: SYNC_TIME adjusts DS3231 RTC accurately.
    10. Periodic broadcast: transmits live RTC time every 2 seconds for real-time web sync.
@@ -373,15 +373,16 @@ void processSerialCommand(char* cmd) {
   if (len == 0) return;
 
   // 1. PING
-  if (strncmp(cmd, "PING", 4) == 0) {
-    Serial.println(F("PONG"));
+  if (strcmp(cmd, "PING") == 0) {
+    // The web application waits for ACK,PING,... before declaring USB ready.
+    Serial.println(F("ACK,PING,PONG"));
     return;
   }
 
   // 2. TEST: Safe Hardware Diagnostic Test (Requirement #4 & #9)
-  // Immediately return ACK,TEST,HARDWARE_OK so Web Serial does NOT time out!
+  // Immediately return ACK,TEST,OK so Web Serial does NOT time out!
   if (strncmp(cmd, "TEST", 4) == 0) {
-    Serial.println(F("ACK,TEST,HARDWARE_OK"));
+    Serial.println(F("ACK,TEST,OK"));
     hardwareTestActive = true;
     hardwareTestStartTime = millis();
     digitalWrite(LED_PIN, HIGH);
