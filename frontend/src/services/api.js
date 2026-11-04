@@ -623,7 +623,7 @@ export const api = {
     });
   },
 
-  async markMedicineTaken(medicineId, customTime = null) {
+  async markMedicineTaken(medicineId, customTime = null, method = 'website') {
     const user = await this.getCurrentUser();
     if (!user) throw new Error('Authentication required.');
 
@@ -638,13 +638,16 @@ export const api = {
     const medicines = await this.getMedicines();
     const med = medicines.find((m) => m.id === medicineId);
 
+    const doseId = `${medicineId}_${todayStr}`;
     const logEntry = {
       id: 'log_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+      dose_id: doseId,
       medicine_id: medicineId,
       user_id: user.id,
       scheduled_time: med ? med.schedule_time : 'Scheduled',
       taken_at: timeStr,
       status: 'taken',
+      method: method || 'website',
       created_at: now.toISOString(),
       _syncStatus: 'pending_insert'
     };
@@ -663,6 +666,8 @@ export const api = {
     if (existingIndex >= 0) {
       logs[existingIndex].status = 'taken';
       logs[existingIndex].taken_at = timeStr;
+      logs[existingIndex].method = method || 'website';
+      logs[existingIndex].dose_id = doseId;
     } else {
       logs.unshift(logEntry);
     }
@@ -728,12 +733,14 @@ export const api = {
 
       return {
         id: log.id,
+        dose_id: log.dose_id || `${log.medicine_id}_${log.created_at?.slice(0, 10)}`,
         date: dateFormatted,
         medicine: med ? med.name : 'Prescribed Medicine',
         dosage: med ? `${med.dosage} ${med.dosage_unit || ''}`.trim() : 'Standard dose',
         scheduled: log.scheduled_time || (med ? med.schedule_time : '—'),
         taken: log.taken_at || '—',
         status: log.status,
+        method: log.method || 'website',
         slot: med?.slot || 1
       };
     });
@@ -835,15 +842,67 @@ export const api = {
       hour12: true
     });
 
-    if (payload.medicineId) {
-      await this.markMedicineTaken(payload.medicineId, timeStr);
+    let targetMedicineId = payload.medicineId;
+
+    // Safety resolution: if medicineId is missing or "default", identify the correct active reminder
+    if (!targetMedicineId || targetMedicineId === 'default') {
+      try {
+        const schedule = await this.getTodaySchedule();
+        const pendingMeds = schedule.filter((m) => m.status === 'pending' || m.status === 'upcoming');
+
+        if (pendingMeds.length === 1) {
+          targetMedicineId = pendingMeds[0].id;
+        } else if (pendingMeds.length > 1) {
+          // Check matching scheduled time
+          const timeMatch = pendingMeds.filter((m) => {
+            const rawTime = m.schedule_time || m.time || '';
+            const parts = rawTime.match(/(\d+):(\d+)/);
+            if (!parts) return false;
+            return payload.takenAt && payload.takenAt.includes(parts[0]);
+          });
+
+          if (timeMatch.length === 1) {
+            targetMedicineId = timeMatch[0].id;
+          } else {
+            console.warn('[SmartMed Hardware Event] Ambiguous reminder: multiple medicines match. Awaiting user confirmation.');
+            hardwareListeners.forEach((fn) => {
+              try {
+                fn({
+                  ...payload,
+                  ambiguous: true,
+                  matchingMeds: timeMatch.length > 0 ? timeMatch : pendingMeds,
+                  receivedAt: timeStr
+                });
+              } catch (e) {
+                console.error(e);
+              }
+            });
+            return { success: false, ambiguous: true };
+          }
+        }
+      } catch (e) {
+        console.error('Error resolving hardware target medicine:', e);
+      }
+    }
+
+    if (targetMedicineId) {
+      await this.markMedicineTaken(targetMedicineId, timeStr, 'physical_button');
     }
 
     hardwareListeners.forEach((fn) => {
-      try { fn({ ...payload, receivedAt: timeStr }); } catch (e) { console.error(e); }
+      try {
+        fn({
+          ...payload,
+          medicineId: targetMedicineId,
+          receivedAt: timeStr,
+          source: 'physical_button'
+        });
+      } catch (e) {
+        console.error(e);
+      }
     });
 
-    return { success: true, processedAt: timeStr };
+    return { success: true, processedAt: timeStr, medicineId: targetMedicineId };
   },
 
   // =========================================================================

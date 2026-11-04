@@ -33,6 +33,15 @@ export default function History() {
 
   useEffect(() => {
     loadData();
+
+    // Auto-update history if hardware event occurs while viewing this page
+    const unsubscribeHardware = api.subscribeHardware(() => {
+      loadData();
+    });
+
+    return () => {
+      unsubscribeHardware();
+    };
   }, [filter]);
 
   const filteredHistory = historyData.filter((item) =>
@@ -43,7 +52,7 @@ export default function History() {
   const handleExportCSV = () => {
     if (filteredHistory.length === 0) return;
 
-    const headers = ['Date', 'Medicine', 'Dosage', 'Scheduled Time', 'Actual Taken Time', 'Status', 'Box Compartment'];
+    const headers = ['Date', 'Medicine', 'Dosage', 'Scheduled Time', 'Actual Taken Time', 'Status', 'Logged Via', 'Box Compartment'];
     const rows = filteredHistory.map((h) => [
       h.date,
       `"${h.medicine}"`,
@@ -51,6 +60,7 @@ export default function History() {
       h.scheduled,
       h.taken || '—',
       h.status,
+      h.method === 'physical_button' ? 'Physical Push Button' : 'Website Dashboard',
       h.slot ? `Slot #${h.slot}` : ''
     ]);
 
@@ -353,9 +363,20 @@ export default function History() {
 
                     <td style={{ padding: '1rem 1.25rem', fontSize: '0.9rem' }}>
                       {row.taken !== '—' ? (
-                        <span style={{ fontWeight: 700, color: 'var(--status-taken-text)' }}>
-                          {row.taken}
-                        </span>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
+                          <span style={{ fontWeight: 700, color: 'var(--status-taken-text)' }}>
+                            {row.taken}
+                          </span>
+                          <span
+                            style={{
+                              fontSize: '0.72rem',
+                              fontWeight: 600,
+                              color: row.method === 'physical_button' ? 'var(--primary-600)' : 'var(--text-muted)'
+                            }}
+                          >
+                            {row.method === 'physical_button' ? '🔘 Push Button' : '🌐 Web Dashboard'}
+                          </span>
+                        </div>
                       ) : (
                         <span style={{ color: 'var(--text-muted)' }}>—</span>
                       )}

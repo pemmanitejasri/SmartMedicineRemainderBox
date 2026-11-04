@@ -55,11 +55,13 @@ const server = http.createServer((req, res) => {
 
         const eventData = {
           type: 'medicine_status_change',
-          medicineId: payload.medicineId,
+          medicineId: payload.medicineId || payload.id,
           status: payload.status || 'taken',
           takenAt: payload.takenAt || new Date().toISOString(),
           slot: payload.slot || 1,
-          deviceId: payload.deviceId || 'SmartMed-Box-01'
+          deviceId: payload.deviceId || 'SmartMed-Box-01',
+          source: payload.source || payload.method || 'physical_button',
+          method: payload.method || 'physical_button'
         };
 
         // Broadcast to all connected web dashboards

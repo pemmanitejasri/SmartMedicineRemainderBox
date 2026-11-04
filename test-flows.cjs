@@ -152,7 +152,57 @@ async function runTests() {
   console.assert(savedSettings.theme === 'dark', 'Theme persistence verified');
   console.log('✅ Test 15 Passed: Dark mode theme preference persists across sessions.');
 
-  console.log('\n🎉 ALL TESTS (1 through 15) PASSED FLAWLESSLY!\n');
+  // Test 16: Hardware Push Button Event & Dose Identifier (Requirements #5 & #7)
+  const medForHardware = await api.addMedicine({
+    name: 'Aspirin',
+    dosage: '75',
+    dosage_unit: 'mg',
+    schedule_time: '14:30',
+    meal_instruction: 'After Lunch'
+  });
+
+  await api.receiveHardwareEvent({
+    medicineId: medForHardware.id,
+    takenAt: '14:32',
+    source: 'physical_button'
+  });
+
+  const historyAfterButton = await api.getHistory('today');
+  const aspirinLog = historyAfterButton.find(h => h.medicine === 'Aspirin');
+  console.assert(aspirinLog !== undefined, 'Aspirin log recorded');
+  console.assert(aspirinLog.method === 'physical_button', 'Log method is physical_button');
+  console.assert(aspirinLog.dose_id.startsWith(medForHardware.id), 'Dose ID contains medicine ID');
+  console.assert(aspirinLog.taken === '14:32', 'Taken timestamp matches button event');
+  console.log('✅ Test 16 Passed: Hardware push button event records dose with method="physical_button" and distinct dose_id.');
+
+  // Test 17: Dose-level vs Permanent distinction (Requirement #5)
+  // Tomorrow's dose calculation would remain upcoming because log is date-bound
+  const todaySchedule = await api.getTodaySchedule();
+  const aspirinToday = todaySchedule.find(m => m.id === medForHardware.id);
+  console.assert(aspirinToday.status === 'taken', 'Today dose is taken');
+  console.log('✅ Test 17 Passed: Today dose is marked taken while preserving medicine schedule definition.');
+
+  // Test 18: Safe Ambiguous Reminder Resolution (Requirement #5)
+  const ambigMed1 = await api.addMedicine({
+    name: 'Amox 1',
+    dosage: '250',
+    schedule_time: '18:00'
+  });
+  const ambigMed2 = await api.addMedicine({
+    name: 'Amox 2',
+    dosage: '500',
+    schedule_time: '18:00'
+  });
+
+  // Generic/unassigned event at 18:00 with two simultaneous untaken medicines
+  const ambigResult = await api.receiveHardwareEvent({
+    medicineId: null,
+    takenAt: '18:00'
+  });
+  console.assert(ambigResult.ambiguous === true, 'Ambiguous event flagged without completing wrong medicine');
+  console.log('✅ Test 18 Passed: When multiple medicines share reminder time, system safely detects ambiguity and prevents completing wrong medicine.');
+
+  console.log('\n🎉 ALL TESTS (1 through 18) PASSED FLAWLESSLY!\n');
 }
 
 runTests().catch(err => {

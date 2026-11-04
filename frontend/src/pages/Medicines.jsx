@@ -16,6 +16,12 @@ import {
 } from 'lucide-react';
 import StatusBadge from '../components/StatusBadge';
 import { api } from '../services/api';
+import {
+  isArduinoConnected,
+  sendMedicineReminder,
+  removeMedicineReminder,
+  formatTo24Hour
+} from '../arduinoSerial';
 
 export default function Medicines({ onNotify }) {
   const [medicines, setMedicines] = useState([]);
@@ -72,14 +78,29 @@ export default function Medicines({ onNotify }) {
     if (!editTarget) return;
 
     try {
-      await api.updateMedicine(editTarget.id, editForm);
+      const formatted24Time = formatTo24Hour(editForm.schedule_time);
+      const updatedData = { ...editForm, schedule_time: formatted24Time };
+
+      await api.updateMedicine(editTarget.id, updatedData);
+
+      // Synchronize with Arduino if connected
+      if (isArduinoConnected()) {
+        try {
+          await sendMedicineReminder({
+            id: editTarget.id,
+            schedule_time: formatted24Time
+          });
+        } catch (hwErr) {
+          console.warn('Failed to update hardware reminder:', hwErr);
+        }
+      }
+
       setEditTarget(null);
       await loadMedicines();
-      // Requirement #8: Medicine updated successfully
       if (onNotify) {
         onNotify({
           title: 'Medicine updated successfully',
-          desc: `${editForm.name} changes have been saved to your database.`,
+          desc: `${editForm.name} changes saved and synchronized.`,
           type: 'success'
         });
       }
@@ -100,14 +121,25 @@ export default function Medicines({ onNotify }) {
 
     try {
       const medName = deleteTarget.name;
-      await api.deleteMedicine(deleteTarget.id);
+      const medId = deleteTarget.id;
+
+      await api.deleteMedicine(medId);
+
+      // Remove reminder from Arduino if connected
+      if (isArduinoConnected()) {
+        try {
+          await removeMedicineReminder(medId);
+        } catch (hwErr) {
+          console.warn('Failed to remove reminder from hardware:', hwErr);
+        }
+      }
+
       setDeleteTarget(null);
       await loadMedicines();
-      // Requirement #9: Medicine deleted successfully
       if (onNotify) {
         onNotify({
           title: 'Medicine deleted successfully',
-          desc: `${medName} was removed from your records.`,
+          desc: `${medName} was removed from records and hardware schedule.`,
           type: 'success'
         });
       }

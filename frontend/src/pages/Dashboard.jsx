@@ -1,4 +1,6 @@
 import React, { useState, useEffect } from 'react';
+import ArduinoConnection from "../ArduinoConnection";
+import { subscribeArduinoStatus } from "../arduinoSerial";
 import { Link } from 'react-router-dom';
 import {
   Calendar,
@@ -42,19 +44,33 @@ export default function Dashboard({ onNotify }) {
 
   useEffect(() => {
     loadDashboardData();
+
     const unsubHardware = api.subscribeHardware((event) => {
       loadDashboardData();
       if (onNotify) {
-        onNotify({
-          title: 'Hardware Signal Received',
-          desc: `Smart Box detected medicine #${event.medicineId} dispensed. Status updated to Taken.`,
-          type: 'success'
-        });
+        if (event.ambiguous) {
+          onNotify({
+            title: 'Multiple Medicines Due',
+            desc: 'Multiple reminders are scheduled at this time. Please select which medicine was taken.',
+            type: 'warning'
+          });
+        } else {
+          onNotify({
+            title: 'Medicine Taken via Smart Box',
+            desc: `Physical push button recorded dose taken at ${event.receivedAt || event.takenAt || 'now'}.`,
+            type: 'success'
+          });
+        }
       }
+    });
+
+    const unsubStatus = subscribeArduinoStatus(() => {
+      loadDashboardData();
     });
 
     return () => {
       unsubHardware();
+      unsubStatus();
     };
   }, []);
 
@@ -540,6 +556,7 @@ export default function Dashboard({ onNotify }) {
           </div>
         )}
       </div>
+      <ArduinoConnection onNotify={onNotify} />
     </div>
   );
 }

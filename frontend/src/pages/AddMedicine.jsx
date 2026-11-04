@@ -1,117 +1,148 @@
-import React, { useState } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
+
+import React, { useState } from "react";
+import { useNavigate, Link } from "react-router-dom";
 import {
   Pill,
-  Clock,
   ArrowLeft,
   CheckCircle2,
-  Calendar,
-  Utensils,
-  Box
-} from 'lucide-react';
-import { api } from '../services/api';
+} from "lucide-react";
+import { api } from "../services/api";
+import {
+  isArduinoConnected,
+  sendMedicineReminder,
+  formatTo24Hour
+} from "../arduinoSerial";
 
 export default function AddMedicine({ onNotify }) {
   const navigate = useNavigate();
 
-  const [name, setName] = useState('');
-  const [dosageValue, setDosageValue] = useState('');
-  const [dosageUnit, setDosageUnit] = useState('mg');
-  const [scheduleTime, setScheduleTime] = useState('08:00 AM');
-  const [frequency, setFrequency] = useState('Once a day');
-  const [mealInstruction, setMealInstruction] = useState('After Breakfast');
+  const [name, setName] = useState("");
+  const [dosageValue, setDosageValue] = useState("");
+  const [dosageUnit, setDosageUnit] = useState("mg");
+  const [scheduleTime, setScheduleTime] = useState("");
+  const [frequency, setFrequency] = useState("Once a day");
+  const [mealInstruction, setMealInstruction] =
+    useState("After Breakfast");
   const [slot, setSlot] = useState(1);
-  const [startDate, setStartDate] = useState(new Date().toISOString().split('T')[0]);
-  const [endDate, setEndDate] = useState('');
-  const [notes, setNotes] = useState('');
+  const [startDate, setStartDate] = useState(
+    new Date().toISOString().split("T")[0]
+  );
+  const [endDate, setEndDate] = useState("");
+  const [notes, setNotes] = useState("");
   const [saving, setSaving] = useState(false);
+
+  const notify = (title, desc, type) => {
+    onNotify?.({ title, desc, type });
+  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
 
     if (!name.trim()) {
-      if (onNotify) {
-        onNotify({
-          title: 'Validation Error',
-          desc: 'Please enter a medicine name.',
-          type: 'error'
-        });
-      }
+      notify("Validation Error", "Please enter a medicine name.", "error");
       return;
     }
 
     if (!dosageValue.trim()) {
-      if (onNotify) {
-        onNotify({
-          title: 'Validation Error',
-          desc: 'Please enter a dosage value.',
-          type: 'error'
-        });
-      }
+      notify("Validation Error", "Please enter a dosage value.", "error");
+      return;
+    }
+
+    if (!scheduleTime) {
+      notify("Validation Error", "Please select a reminder time.", "error");
+      return;
+    }
+
+    const formatted24Time = formatTo24Hour(scheduleTime);
+    if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(formatted24Time)) {
+      notify("Validation Error", "Please enter a valid reminder time (HH:MM).", "error");
       return;
     }
 
     setSaving(true);
+    let medicineSaved = false;
+
     try {
       const res = await api.addMedicine({
         name: name.trim(),
         dosage: dosageValue.trim(),
         dosage_unit: dosageUnit,
-        schedule_time: scheduleTime,
+        schedule_time: formatted24Time,
         frequency,
         meal_instruction: mealInstruction,
         slot: Number(slot),
         start_date: startDate,
         end_date: endDate || null,
-        notes: notes.trim()
+        notes: notes.trim(),
       });
 
-      // Requirement #3: If added offline, show "Medicine saved. Will sync when internet is available."
+      medicineSaved = true;
+
       if (res?.isOfflineSaved) {
-        if (onNotify) {
-          onNotify({
-            title: 'Medicine saved',
-            desc: 'Will sync when internet is available.',
-            type: 'success'
-          });
-        }
-      } else {
-        if (onNotify) {
-          onNotify({
-            title: 'Medicine added successfully',
-            desc: `${name.trim()} (${dosageValue.trim()} ${dosageUnit}) saved to database.`,
-            type: 'success'
-          });
-        }
+        notify(
+          "Medicine saved offline",
+          `${name.trim()} saved locally. It will sync with cloud and Smart Box once connected.`,
+          "success"
+        );
+        navigate("/medicines");
+        return;
       }
 
-      navigate('/medicines');
-    } catch (err) {
-      if (onNotify) {
-        onNotify({
-          title: 'Unable to save medicine',
-          desc: err.message || 'Please try again.',
-          type: 'error'
-        });
+      // If Arduino is connected, send schedule immediately and verify ACK
+      if (isArduinoConnected()) {
+        try {
+          await sendMedicineReminder({
+            id: res.id,
+            schedule_time: formatted24Time
+          });
+
+          notify(
+            "Medicine added successfully",
+            `${name.trim()} saved and reminder confirmed by Smart Box for ${formatted24Time}.`,
+            "success"
+          );
+        } catch (hardwareError) {
+          notify(
+            "Medicine saved, hardware pending",
+            `Saved to database, but Arduino did not confirm the reminder (${hardwareError.message}). Check connection and click 'Sync Reminders'.`,
+            "warning"
+          );
+        }
+      } else {
+        notify(
+          "Medicine saved successfully",
+          `${name.trim()} saved to database. Medicine Box is disconnected — reminder will synchronize once connected.`,
+          "info"
+        );
       }
+
+      navigate("/medicines");
+    } catch (err) {
+      notify(
+        medicineSaved
+          ? "Medicine saved, but another step failed"
+          : "Unable to save medicine",
+        err.message || "Please try again.",
+        "error"
+      );
     } finally {
       setSaving(false);
     }
   };
 
   return (
-    <div style={{ maxWidth: '800px', margin: '0 auto' }}>
-      <div style={{ marginBottom: '1.25rem' }}>
+    <div style={{ maxWidth: "800px", margin: "0 auto" }}>
+      <div style={{ marginBottom: "1.25rem" }}>
         <Link
           to="/medicines"
           style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: '0.4rem',
-            color: 'var(--text-secondary)',
-            textDecoration: 'none',
-            fontSize: '0.9rem',
-            fontWeight: 600
+            display: "inline-flex",
+            alignItems: "center",
+            gap: "0.4rem",
+            color: "var(--text-secondary)",
+            textDecoration: "none",
+            fontSize: "0.9rem",
+            fontWeight: 600,
           }}
         >
           <ArrowLeft size={16} />
@@ -119,34 +150,57 @@ export default function AddMedicine({ onNotify }) {
         </Link>
       </div>
 
-      <div className="card" style={{ padding: '2rem' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.85rem', marginBottom: '1.5rem', borderBottom: '1px solid var(--border-light)', paddingBottom: '1rem' }}>
+      <div className="card" style={{ padding: "2rem" }}>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "0.85rem",
+            marginBottom: "1.5rem",
+            borderBottom: "1px solid var(--border-light)",
+            paddingBottom: "1rem",
+          }}
+        >
           <div
             style={{
-              width: '44px',
-              height: '44px',
-              borderRadius: '12px',
-              background: 'var(--primary-gradient)',
-              color: '#ffffff',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center'
+              width: "44px",
+              height: "44px",
+              borderRadius: "12px",
+              background: "var(--primary-gradient)",
+              color: "#ffffff",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
             }}
           >
             <Pill size={24} />
           </div>
+
           <div>
-            <h1 style={{ fontSize: '1.5rem', fontWeight: 800, color: 'var(--text-primary)', letterSpacing: '-0.02em' }}>
+            <h1
+              style={{
+                fontSize: "1.5rem",
+                fontWeight: 800,
+                color: "var(--text-primary)",
+                letterSpacing: "-0.02em",
+                margin: 0,
+              }}
+            >
               Add Medicine
             </h1>
-            <p style={{ fontSize: '0.88rem', color: 'var(--text-muted)' }}>
-              Record a new prescription to your personal database schedule
+
+            <p
+              style={{
+                fontSize: "0.88rem",
+                color: "var(--text-muted)",
+              }}
+            >
+              Add medicine details and set its reminder time.
             </p>
           </div>
         </div>
 
         <form onSubmit={handleSubmit}>
-          {/* Medicine Name & Dosage */}
           <div className="grid-2">
             <div className="form-group">
               <label className="form-label" htmlFor="med-name">
@@ -156,7 +210,7 @@ export default function AddMedicine({ onNotify }) {
                 id="med-name"
                 type="text"
                 className="form-input"
-                placeholder="e.g. Paracetamol, Metformin"
+                placeholder="e.g. Paracetamol"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 required
@@ -164,11 +218,12 @@ export default function AddMedicine({ onNotify }) {
             </div>
 
             <div className="form-group">
-              <label className="form-label">
+              <label className="form-label" htmlFor="dosage">
                 Dosage & Unit *
               </label>
-              <div style={{ display: 'flex', gap: '0.5rem' }}>
+              <div style={{ display: "flex", gap: "0.5rem" }}>
                 <input
+                  id="dosage"
                   type="text"
                   className="form-input"
                   placeholder="e.g. 500"
@@ -177,9 +232,10 @@ export default function AddMedicine({ onNotify }) {
                   style={{ flex: 1 }}
                   required
                 />
+
                 <select
                   className="form-select"
-                  style={{ width: '130px' }}
+                  style={{ width: "130px" }}
                   value={dosageUnit}
                   onChange={(e) => setDosageUnit(e.target.value)}
                 >
@@ -193,17 +249,15 @@ export default function AddMedicine({ onNotify }) {
             </div>
           </div>
 
-          {/* Schedule Time & Frequency */}
           <div className="grid-2">
             <div className="form-group">
               <label className="form-label" htmlFor="schedule-time">
-                Schedule Time *
+                Reminder Time *
               </label>
               <input
                 id="schedule-time"
-                type="text"
+                type="time"
                 className="form-input"
-                placeholder="e.g. 08:00 AM, 10:00 PM"
                 value={scheduleTime}
                 onChange={(e) => setScheduleTime(e.target.value)}
                 required
@@ -228,7 +282,6 @@ export default function AddMedicine({ onNotify }) {
             </div>
           </div>
 
-          {/* Meal Instruction & Compartment Slot */}
           <div className="grid-2">
             <div className="form-group">
               <label className="form-label" htmlFor="meal-instruction">
@@ -241,7 +294,9 @@ export default function AddMedicine({ onNotify }) {
                 onChange={(e) => setMealInstruction(e.target.value)}
               >
                 <option value="After Breakfast">After Breakfast</option>
-                <option value="Before Breakfast">Before Breakfast (Empty Stomach)</option>
+                <option value="Before Breakfast">
+                  Before Breakfast (Empty Stomach)
+                </option>
                 <option value="After Lunch">After Lunch</option>
                 <option value="Before Lunch">Before Lunch</option>
                 <option value="After Dinner">After Dinner</option>
@@ -268,7 +323,6 @@ export default function AddMedicine({ onNotify }) {
             </div>
           </div>
 
-          {/* Start Date & End Date */}
           <div className="grid-2">
             <div className="form-group">
               <label className="form-label" htmlFor="start-date">
@@ -297,7 +351,6 @@ export default function AddMedicine({ onNotify }) {
             </div>
           </div>
 
-          {/* Notes */}
           <div className="form-group">
             <label className="form-label" htmlFor="notes-area">
               Special Instructions / Notes
@@ -306,21 +359,35 @@ export default function AddMedicine({ onNotify }) {
               id="notes-area"
               className="form-textarea"
               rows={2}
-              placeholder="e.g. Take with a full glass of water, avoid grapefruit juice"
+              placeholder="e.g. Take with a full glass of water"
               value={notes}
               onChange={(e) => setNotes(e.target.value)}
             />
           </div>
 
-          {/* Actions */}
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '1rem', marginTop: '1.5rem', borderTop: '1px solid var(--border-light)', paddingTop: '1.25rem' }}>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "flex-end",
+              gap: "1rem",
+              marginTop: "1.5rem",
+              borderTop: "1px solid var(--border-light)",
+              paddingTop: "1.25rem",
+            }}
+          >
             <Link to="/medicines" className="btn btn-secondary">
               Cancel
             </Link>
 
-            <button type="submit" disabled={saving} className="btn btn-primary" style={{ minWidth: '160px' }}>
+            <button
+              type="submit"
+              disabled={saving}
+              className="btn btn-primary"
+              style={{ minWidth: "160px" }}
+            >
               <CheckCircle2 size={18} />
-              <span>{saving ? 'Saving...' : 'Save Medicine'}</span>
+              <span>{saving ? "Saving..." : "Save Medicine"}</span>
             </button>
           </div>
         </form>

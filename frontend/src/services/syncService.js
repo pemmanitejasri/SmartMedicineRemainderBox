@@ -1,14 +1,22 @@
+
 import { db } from './localDb.js';
 import { supabase, isSupabaseConfigured } from './supabase.js';
 
-// Status listeners for UI connection badges (Navbar / Dashboard)
+// SMS is disabled until the backend API is fixed.
+const SMS_ENABLED = false;
+
+// Status listeners
 const statusListeners = new Set();
 
-let isOnline = typeof navigator !== 'undefined' ? navigator.onLine : true;
+let isOnline = typeof navigator !== 'undefined'
+  ? navigator.onLine
+  : true;
+
 let syncState = isOnline ? 'synced' : 'offline';
 let syncTimer = null;
 
 export const syncService = {
+
   getIsOnline() {
     return isOnline;
   },
@@ -19,46 +27,56 @@ export const syncService = {
 
   subscribeStatus(callback) {
     statusListeners.add(callback);
-    // Initial call
     this.notifyStatus();
+
     return () => statusListeners.delete(callback);
   },
 
   async getPendingCount() {
     try {
       const pendingMeds = await db.medicines
-        .filter((m) => m._syncStatus && m._syncStatus !== 'synced')
+        .filter(m => m._syncStatus && m._syncStatus !== 'synced')
         .count();
+
       const pendingLogs = await db.medicine_logs
-        .filter((l) => l._syncStatus && l._syncStatus !== 'synced')
+        .filter(l => l._syncStatus && l._syncStatus !== 'synced')
         .count();
-      const pendingSms = await db.pending_sms
-        .filter((s) => s.status === 'pending')
-        .count();
+
+      const pendingSms = SMS_ENABLED
+        ? await db.pending_sms
+            .filter(s => s.status === 'pending')
+            .count()
+        : 0;
+
       return pendingMeds + pendingLogs + pendingSms;
+
     } catch (e) {
+      console.error('[SmartMed] Pending count error:', e);
       return 0;
     }
   },
 
   async notifyStatus() {
     const pendingCount = await this.getPendingCount();
+
     const status = {
       isOnline,
       syncState,
       pendingCount,
       label: !isOnline
-        ? (pendingCount > 0 ? 'Offline – Changes saved locally' : 'Offline')
+        ? 'Offline – Changes saved locally'
         : syncState === 'syncing'
         ? 'Syncing...'
+        : pendingCount > 0
+        ? 'Pending Sync'
         : 'Synced'
     };
 
-    statusListeners.forEach((fn) => {
+    statusListeners.forEach(fn => {
       try {
         fn(status);
       } catch (e) {
-        console.error('Error notifying sync listener:', e);
+        console.error('[SmartMed] Status listener error:', e);
       }
     });
   },
@@ -68,39 +86,41 @@ export const syncService = {
     this.notifyStatus();
   },
 
-  /**
-   * Initializes network listeners and automatic sync
-   */
+  // Initialize automatic synchronization
   init() {
     if (typeof window === 'undefined') return;
 
     window.addEventListener('online', () => {
-      console.log('[SmartMed Sync] Internet connection restored. Initiating auto-sync...');
+      console.log('[SmartMed] Internet connection restored.');
+
       isOnline = true;
+
       this.triggerSync();
     });
 
     window.addEventListener('offline', () => {
-      console.log('[SmartMed Sync] Network offline. Operating in Local IndexedDB Mode.');
+      console.log('[SmartMed] Operating in offline mode.');
+
       isOnline = false;
+
       this.setSyncState('offline');
     });
 
-    // Check periodically every 45s when online
-    if (syncTimer) clearInterval(syncTimer);
+    if (syncTimer) {
+      clearInterval(syncTimer);
+    }
+
+    // Automatic sync every 45 seconds
     syncTimer = setInterval(() => {
       if (isOnline) {
-        this.triggerSync(true); // silent sync
+        this.triggerSync(true);
       }
     }, 45000);
 
-    // Initial check
     this.notifyStatus();
   },
 
-  /**
-   * Trigger synchronization with debounce
-   */
+  // Trigger synchronization
   async triggerSync(silent = false) {
     if (!isOnline) {
       this.setSyncState('offline');
@@ -113,59 +133,75 @@ export const syncService = {
 
     try {
       await this.syncAll();
+
       this.setSyncState('synced');
+
     } catch (err) {
-      console.warn('[SmartMed Sync] Auto-sync encountered non-fatal error:', err.message);
+      console.warn('[SmartMed Sync] Sync error:', err.message);
+
       const pending = await this.getPendingCount();
+
       this.setSyncState(pending > 0 ? 'offline' : 'synced');
     }
   },
 
-  /**
-   * Executes full two-way synchronization
-   */
+  // Complete synchronization
   async syncAll() {
     if (!isOnline) return;
 
-    // 1. Sync Pending SMS Queue
-    await this.syncPendingSms();
+    // SMS synchronization is optional.
+    if (SMS_ENABLED) {
+      await this.syncPendingSms();
+    }
 
-    // 2. Sync Database if Supabase is configured
+    // Synchronize database if Supabase is configured.
     if (isSupabaseConfigured() && supabase) {
       await this.syncProfilesToRemote();
+
       await this.syncMedicinesToRemote();
+
       await this.syncLogsToRemote();
+
       await this.syncRemoteMedicinesToLocal();
     }
   },
 
-  /**
-   * Synchronize pending SMS messages (Requirement #11)
-   * Avoids sending outdated reminders (>25 minutes old)
-   */
+  // SMS synchronization
   async syncPendingSms() {
+    if (!SMS_ENABLED) {
+      return;
+    }
+
     try {
-      const pendingList = await db.pending_sms.where('status').equals('pending').toArray();
+      const pendingList = await db.pending_sms
+        .where('status')
+        .equals('pending')
+        .toArray();
+
       const now = Date.now();
 
       for (const item of pendingList) {
-        // Expiry check: Drop if scheduled time or creation time was over 25 minutes ago
-        const ageMinutes = (now - new Date(item.created_at).getTime()) / (1000 * 60);
 
+        const ageMinutes =
+          (now - new Date(item.created_at).getTime()) /
+          (1000 * 60);
+
+        // Remove expired messages
         if (ageMinutes > 25) {
-          console.log(`[SmartMed SMS] Dropping expired reminder for ${item.phone}: "${item.message}"`);
           await db.pending_sms.update(item.id, {
             status: 'expired',
-            error: 'Reminder expired while offline (>25 mins past schedule)'
+            error: 'Reminder expired while offline'
           });
+
           continue;
         }
 
-        // Send to backend SMS service
         try {
           const res = await fetch('/api/sms/send', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: {
+              'Content-Type': 'application/json'
+            },
             body: JSON.stringify({
               phone: item.phone,
               message: item.message,
@@ -176,28 +212,44 @@ export const syncService = {
           });
 
           if (res.ok) {
-            await db.pending_sms.update(item.id, { status: 'sent', sent_at: new Date().toISOString() });
+            await db.pending_sms.update(item.id, {
+              status: 'sent',
+              sent_at: new Date().toISOString(),
+              error: null
+            });
+
           } else {
             const errData = await res.json().catch(() => ({}));
-            await db.pending_sms.update(item.id, { error: errData.error || 'Server error' });
+
+            await db.pending_sms.update(item.id, {
+              error: errData.error || `Server error ${res.status}`
+            });
+
+            console.error(
+              '[SmartMed SMS] Server error:',
+              res.status,
+              errData
+            );
+
+            break;
           }
+
         } catch (e) {
-          // Keep as pending for next sync
-          console.warn('[SmartMed SMS] Server not reached, will retry when online:', e.message);
+          console.warn('[SmartMed SMS] Request failed:', e.message);
           break;
         }
       }
+
     } catch (e) {
-      console.warn('Error syncing pending SMS:', e);
+      console.error('[SmartMed SMS] Sync error:', e);
     }
   },
 
-  /**
-   * Sync Profiles to Supabase
-   */
+  // Synchronize profiles to Supabase
   async syncProfilesToRemote() {
     try {
       const profiles = await db.profiles.toArray();
+
       for (const p of profiles) {
         const payload = {
           id: p.id,
@@ -206,88 +258,135 @@ export const syncService = {
           mobile_number: p.mobile_number,
           created_at: p.created_at
         };
-        await supabase.from('profiles').upsert(payload);
+
+        const { error } = await supabase
+          .from('profiles')
+          .upsert(payload);
+
+        if (error) {
+          console.warn('[SmartMed] Profile sync:', error.message);
+        }
       }
+
     } catch (e) {
-      console.warn('Sync profiles to Supabase:', e.message);
+      console.warn('[SmartMed] Profile sync error:', e.message);
     }
   },
 
-  /**
-   * Sync Local Medicines to Supabase
-   */
+  // Synchronize medicines to Supabase
   async syncMedicinesToRemote() {
     try {
       const pendingMeds = await db.medicines
-        .filter((m) => m._syncStatus && m._syncStatus !== 'synced')
+        .filter(m => m._syncStatus && m._syncStatus !== 'synced')
         .toArray();
 
       for (const med of pendingMeds) {
+
         if (med._syncStatus === 'pending_delete') {
-          await supabase.from('medicines').delete().eq('id', med.id);
-          await db.medicines.delete(med.id);
+
+          const { error } = await supabase
+            .from('medicines')
+            .delete()
+            .eq('id', med.id);
+
+          if (!error) {
+            await db.medicines.delete(med.id);
+          } else {
+            console.warn('[SmartMed] Medicine delete:', error.message);
+          }
+
         } else {
-          // pending_insert or pending_update
+
           const remotePayload = { ...med };
+
           delete remotePayload._syncStatus;
 
-          const { error } = await supabase.from('medicines').upsert(remotePayload);
+          const { error } = await supabase
+            .from('medicines')
+            .upsert(remotePayload);
+
           if (!error) {
-            await db.medicines.update(med.id, { _syncStatus: 'synced' });
+            await db.medicines.update(med.id, {
+              _syncStatus: 'synced'
+            });
+          } else {
+            console.warn('[SmartMed] Medicine sync:', error.message);
           }
         }
       }
+
     } catch (e) {
-      console.warn('Sync medicines to Supabase:', e.message);
+      console.warn('[SmartMed] Medicine sync error:', e.message);
     }
   },
 
-  /**
-   * Sync Local Medicine Logs to Supabase
-   */
+  // Synchronize medicine history to Supabase
   async syncLogsToRemote() {
     try {
       const pendingLogs = await db.medicine_logs
-        .filter((l) => l._syncStatus && l._syncStatus !== 'synced')
+        .filter(l => l._syncStatus && l._syncStatus !== 'synced')
         .toArray();
 
       for (const log of pendingLogs) {
+
         const remotePayload = { ...log };
+
         delete remotePayload._syncStatus;
 
-        const { error } = await supabase.from('medicine_logs').upsert(remotePayload);
+        const { error } = await supabase
+          .from('medicine_logs')
+          .upsert(remotePayload);
+
         if (!error) {
-          await db.medicine_logs.update(log.id, { _syncStatus: 'synced' });
+          await db.medicine_logs.update(log.id, {
+            _syncStatus: 'synced'
+          });
+        } else {
+          console.warn('[SmartMed] History sync:', error.message);
         }
       }
+
     } catch (e) {
-      console.warn('Sync logs to Supabase:', e.message);
+      console.warn('[SmartMed] History sync error:', e.message);
     }
   },
 
-  /**
-   * Pull Remote Medicines into Local IndexedDB
-   */
+  // Download remote medicines into local IndexedDB
   async syncRemoteMedicinesToLocal() {
     try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return;
+      const {
+        data: { user },
+        error: authError
+      } = await supabase.auth.getUser();
+
+      if (authError || !user) return;
 
       const { data, error } = await supabase
         .from('medicines')
         .select('*')
         .eq('user_id', user.id);
 
-      if (!error && data) {
+      if (error) {
+        console.warn('[SmartMed] Remote medicine download:', error.message);
+        return;
+      }
+
+      if (data) {
         for (const remoteMed of data) {
+
           const local = await db.medicines.get(remoteMed.id);
+
           if (!local || local._syncStatus === 'synced') {
-            await db.medicines.put({ ...remoteMed, _syncStatus: 'synced' });
+            await db.medicines.put({
+              ...remoteMed,
+              _syncStatus: 'synced'
+            });
           }
         }
       }
+
     } catch (e) {
-      console.warn('Sync remote medicines to local:', e.message);
+      console.warn('[SmartMed] Remote sync error:', e.message);
     }
   }
 };
